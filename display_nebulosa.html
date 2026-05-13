@@ -173,9 +173,11 @@ function ajustarCanvas() {
   ctx.scale(dpr, dpr);
   calcularZonas();
   // Reasignar posiciones base de las pintitas existentes
-  for (const p of pintitas) p.recalcularBase();
+  if (typeof pintitas !== 'undefined') {
+    for (const p of pintitas) p.recalcularBase();
+  }
 }
-ajustarCanvas();
+// ajustarCanvas() se llama después de declarar pintitas
 window.addEventListener('resize', ajustarCanvas);
 
 // ============================================================
@@ -286,7 +288,7 @@ class Pintita {
     // Fade-in
     const opacidadFade = Math.min(1, this.edad / 2500);
     // Saturación según intensidad
-    const opacidadBase = 0.25 + this.intensidad * 0.45;
+    const opacidadBase = 0.10 + this.intensidad * 0.22;
     const opacidad = opacidadBase * opacidadFade;
 
     // Gradiente radial amplio y muy difuso (estética display 1)
@@ -316,6 +318,7 @@ class Pintita {
 // ============================================================
 const pintitas = [];
 const pintitasMap = new Map();
+ajustarCanvas(); // llamar aquí, después de declarar pintitas
 let ultimoTiempo = performance.now();
 let hoverX = null, hoverY = null;
 let tiempoGlobal = 0;
