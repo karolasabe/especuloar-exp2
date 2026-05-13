@@ -311,17 +311,14 @@ def obtener_relato(respuesta_id):
         'timestamp': row[2]
     })
 
-@app.route('/cargar_corpus', methods=['POST'])
-def cargar_corpus():
-    datos = request.json or []
-    cargados = 0
-    for r in datos:
-        relato = r.get('relato_experiencia', r.get('relato', ''))
-        if relato:
-            categorias = analizar_relato(relato)
-            guardar_respuesta(relato, categorias)
-            cargados += 1
-    return jsonify({'status': 'ok', 'cargados': cargados})
+@app.route('/limpiar', methods=['POST'])
+def limpiar():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute('DELETE FROM respuestas')
+    conn.execute('DELETE FROM pintitas')
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'ok', 'mensaje': 'corpus limpiado'})
 
 if __name__ == '__main__':
     print('Servidor Espéculo(ar) exp2 iniciado')
