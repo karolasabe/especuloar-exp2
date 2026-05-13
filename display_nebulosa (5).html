@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Espéculo(ar) — nebulosa colectiva</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital@0;1&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #050505; }
+  body { font-family: 'Space Mono', monospace; color: #888; }
+
+  #canvas-container { position: fixed; inset: 0; z-index: 1; }
+  canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+
+  #overlay {
+    position: fixed; inset: 0; pointer-events: none; z-index: 2;
+    padding: 2rem;
+    display: flex; flex-direction: column; justify-content: space-between;
+    mix-blend-mode: screen;
+  }
+  .header-bar { display: flex; justify-content: space-between; align-items: flex-start; }
+  .titulo { font-size: 11px; letter-spacing: 0.2em; color: #666; }
+  .subtitulo { font-size: 10px; letter-spacing: 0.1em; color: #444; margin-top: 6px; font-style: italic; }
+  .contador { text-align: right; }
+  .n-respuestas { font-size: 42px; font-weight: 300; color: #aaa; line-height: 1; }
+  .n-label { font-size: 9px; color: #444; letter-spacing: 0.2em; margin-top: 4px; }
+
+  .footer-bar { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 1rem; }
+  .leyenda { display: flex; flex-wrap: wrap; gap: 12px; max-width: 70%; }
+  .leyenda-item { display: flex; align-items: center; gap: 6px; font-size: 9px; color: #555; letter-spacing: 0.05em; }
+  .leyenda-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  .estado { text-align: right; }
+  .estado-dot { width: 5px; height: 5px; border-radius: 50%; background: #1a1a1a; display: inline-block; margin-right: 6px; vertical-align: middle; }
+  .estado-dot.vivo { background: #1D9E75; box-shadow: 0 0 8px rgba(29, 158, 117, 0.4); }
+  .estado-texto { font-size: 9px; color: #444; letter-spacing: 0.15em; }
+
+  .pista {
+    position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+    padding: 1rem 1.5rem; font-size: 9px; color: #444; letter-spacing: 0.2em;
+    pointer-events: none; z-index: 3;
+    opacity: 0.6;
+  }
+
+  /* Modal con el relato */
+  #modal {
+    position: fixed; inset: 0; z-index: 100;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(5, 5, 5, 0.88); padding: 2rem;
+    backdrop-filter: blur(8px);
+  }
+  #modal.activo { display: flex; }
+  .modal-contenido {
+    background: #0d0d0d; border: 0.5px solid #222;
+    max-width: 640px; width: 100%; padding: 2.5rem;
+    max-height: 80vh; overflow-y: auto;
+    color: #ccc; font-family: 'Space Mono', monospace; font-size: 14px; line-height: 1.7;
+    position: relative;
+  }
+  .modal-categorias { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 1.5rem; }
+  .modal-cat-chip { font-size: 10px; padding: 4px 10px; border-radius: 12px; letter-spacing: 0.05em; color: #fff; }
+  .modal-relato { white-space: pre-wrap; color: #ddd; }
+  .modal-cerrar {
+    position: absolute; top: 1rem; right: 1.5rem;
+    background: transparent; border: none; color: #666;
+    font-size: 11px; cursor: pointer; font-family: inherit;
+    letter-spacing: 0.1em;
+  }
+  .modal-cerrar:hover { color: #ddd; }
+
+  @media (max-width: 640px) {
+    #overlay { padding: 1.25rem; }
+    .n-respuestas { font-size: 32px; }
+    .leyenda { max-width: 100%; gap: 8px; }
+    .leyenda-item { font-size: 8px; }
+    .modal-contenido { padding: 1.5rem; font-size: 13px; }
+    .pista { font-size: 8px; padding: 0.75rem; }
+  }
+</style>
+</head>
+<body>
+
+<div id="canvas-container">
+  <canvas id="lienzo" aria-label="Nebulosa colectiva de Espéculo(ar)"></canvas>
+</div>
+
+<div id="overlay">
+  <div class="header-bar">
+    <div>
+      <div class="titulo">ESPÉCULO(AR)</div>
+      <div class="subtitulo">nebulosa colectiva · tecnologías de género</div>
+    </div>
+    <div class="contador">
+      <div class="n-respuestas" id="n-respuestas">—</div>
+      <div class="n-label">VOCES</div>
+    </div>
+  </div>
+
+  <div class="footer-bar">
+    <div class="leyenda" id="leyenda"></div>
+    <div class="estado">
+      <span class="estado-dot" id="estado-dot"></span>
+      <span class="estado-texto" id="estado-texto">conectando</span>
+    </div>
+  </div>
+</div>
+
+<div class="pista">pasa el cursor para abrir la nube · haz click sobre una mancha para leer su relato</div>
+
+<div id="modal" role="dialog" aria-modal="true">
+  <div class="modal-contenido">
+    <button class="modal-cerrar" onclick="cerrarModal()" aria-label="Cerrar">cerrar</button>
+    <div class="modal-categorias" id="modal-cats"></div>
+    <div class="modal-relato" id="modal-texto"></div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// CONFIGURACIÓN
+// ============================================================
+const API_BASE = 'https://especuloar-exp2.onrender.com';
+const POLL_INTERVAL = 5000;
+
+const CATEGORIAS = {
+  'dolor_fisico':              { color: '#E8453A', nombre: 'dolor físico' },
+  'frio_metal':                { color: '#5A8FD4', nombre: 'frío · metal' },
+  'materiales_agradables':     { color: '#E8935A', nombre: 'materiales cálidos' },
+  'miedo_ansiedad':            { color: '#9E9E9E', nombre: 'miedo · ansiedad' },
+  'sensaciones_agradables':    { color: '#D4847A', nombre: 'seguridad · calma' },
+  'normalizacion':             { color: '#6BBF8A', nombre: 'normalización' },
+  'vivencia_sexual_traumatica':{ color: '#9B6BBF', nombre: 'vivencia traumática' },
+  'profesional_masculino':     { color: '#1A3A6B', nombre: 'profesional masculino' },
+  'profesional_femenino':      { color: '#D4B800', nombre: 'profesional femenina' }
+};
+
+const MAX_CATEGORIAS = Object.keys(CATEGORIAS).length; // 9
+
+// Zonas radiales por categoría
+let ZONAS = {};
+function calcularZonas() {
+  const cx = W * 0.5, cy = H * 0.5;
+  const radio = Math.min(W, H) * 0.26;
+  const cats = Object.keys(CATEGORIAS);
+  ZONAS = {};
+  cats.forEach((cat, i) => {
+    const angulo = (i / cats.length) * Math.PI * 2 - Math.PI / 2;
+    ZONAS[cat] = {
+      x: cx + Math.cos(angulo) * radio,
+      y: cy + Math.sin(angulo) * radio
+    };
+  });
+}
+
+// ============================================================
+// CANVAS
+// ============================================================
+const canvas = document.getElementById('lienzo');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0;
+
+function ajustarCanvas() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+  calcularZonas();
+  if (typeof pintitas !== 'undefined') {
+    for (const p of pintitas) p.recalcularBase();
+  }
+}
+
+// ============================================================
+// PINTITA — partícula nebulosa
+// ============================================================
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return { r, g, b };
+}
+
+class Pintita {
+  constructor(id, respuestaId, categoria, numCategorias) {
+    this.id = id;
+    this.respuestaId = respuestaId;
+    this.categoria = categoria;
+    // numCategorias = cantidad de categorías que activó el relato padre (1 a 9)
+    this.numCategorias = numCategorias;
+
+    this.color = CATEGORIAS[categoria]?.color || '#888';
+    this.rgb = hexToRgb(this.color);
+
+    // Densidad normalizada según complejidad del relato (1-9 → 0-1)
+    // Un relato que activa 1 categoría: densidad mínima (fantasmal)
+    // Un relato que activa 9 categorías: densidad máxima (presente)
+    this.densidad = Math.min(1, Math.max(0, (numCategorias - 1) / (MAX_CATEGORIAS - 1)));
+
+    // Semilla angular y radial para posición orgánica dentro de su zona
+    this.semillaAng = Math.random() * Math.PI * 2;
+    this.semillaRad = Math.pow(Math.random(), 0.6);
+
+    this.bx = 0; this.by = 0;
+    this.recalcularBase();
+    this.x = this.bx; this.y = this.by;
+
+    // Offset por repulsión
+    this.ox = 0; this.oy = 0;
+    this.ovx = 0; this.ovy = 0;
+
+    // Radio: manchas más pequeñas y difusas que antes
+    // 1 cat: 38px, 9 cats: 78px
+    this.radioBase = 38 + this.densidad * 40;
+
+    // Opacidad muy baja para acumulación nebulosa sin saturarse
+    // 1 cat: 0.025, 9 cats: 0.11
+    this.opacidadBase = 0.025 + this.densidad * 0.085;
+
+    // Respiración propia (sutil)
+    this.fase = Math.random() * Math.PI * 2;
+    this.velFase = 0.0005 + Math.random() * 0.0003;
+
+    this.edad = 0;
+  }
+
+  recalcularBase() {
+    const zona = ZONAS[this.categoria];
+    if (!zona) { this.bx = W * 0.5; this.by = H * 0.5; return; }
+    // Dispersión amplia dentro de la zona (manchas se entremezclan con vecinas)
+    const dispersion = Math.min(W, H) * 0.22;
+    const r = this.semillaRad * dispersion;
+    this.bx = zona.x + Math.cos(this.semillaAng) * r;
+    this.by = zona.y + Math.sin(this.semillaAng) * r;
+  }
+
+  actualizar(dt, hoverX, hoverY) {
+    this.edad += dt;
+    this.fase += this.velFase * dt;
+
+    // Repulsión del cursor: amplia, suave, lingering
+    if (hoverX !== null) {
+      const dx = (this.bx + this.ox) - hoverX;
+      const dy = (this.by + this.oy) - hoverY;
+      const distSq = dx * dx + dy * dy;
+      const radioInfluencia = 220;
+      if (distSq < radioInfluencia * radioInfluencia && distSq > 1) {
+        const dist = Math.sqrt(distSq);
+        // Curva cuadrática invertida: fuerza alta cerca, decae suave
+        const factorDist = (radioInfluencia - dist) / radioInfluencia;
+        const fuerza = 0.5 * factorDist * factorDist;
+        this.ovx += (dx / dist) * fuerza;
+        this.ovy += (dy / dist) * fuerza;
+      }
+    }
+
+    // Resorte hacia posición base (recuperación suave)
+    const k = 0.010;
+    this.ovx -= this.ox * k;
+    this.ovy -= this.oy * k;
+
+    // Damping (resistencia del medio)
+    this.ovx *= 0.93;
+    this.ovy *= 0.93;
+
+    // Integrar offset
+    this.ox += this.ovx;
+    this.oy += this.ovy;
+
+    // Ruido browniano leve (vida orgánica continua)
+    this.ox += (Math.random() - 0.5) * 0.12;
+    this.oy += (Math.random() - 0.5) * 0.12;
+
+    this.x = this.bx + this.ox;
+    this.y = this.by + this.oy;
+  }
+
+  dibujar(ctx, respiracionGlobal) {
+    // Respiración: propia (sutil) + global del organismo
+    const respiraPropio = Math.sin(this.fase) * 2.5;
+    const respiraGlobal = respiracionGlobal * 4;
+    const radio = Math.max(2, this.radioBase + respiraPropio + respiraGlobal);
+
+    // Fade-in al aparecer
+    const opacidadFade = Math.min(1, this.edad / 2500);
+    const opacidad = this.opacidadBase * opacidadFade;
+
+    // Gradiente radial con caída muy suave (preserva calidad nebulosa)
+    const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, radio);
+    grad.addColorStop(0,    `rgba(${this.rgb.r}, ${this.rgb.g}, ${this.rgb.b}, ${opacidad})`);
+    grad.addColorStop(0.35, `rgba(${this.rgb.r}, ${this.rgb.g}, ${this.rgb.b}, ${opacidad * 0.6})`);
+    grad.addColorStop(0.7,  `rgba(${this.rgb.r}, ${this.rgb.g}, ${this.rgb.b}, ${opacidad * 0.2})`);
+    grad.addColorStop(1,    `rgba(${this.rgb.r}, ${this.rgb.g}, ${this.rgb.b}, 0)`);
+
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, radio, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Detección de click sobre la mancha
+  contiene(x, y) {
+    const dx = x - this.x;
+    const dy = y - this.y;
+    const radioClick = this.radioBase * 0.55;
+    return (dx * dx + dy * dy) < (radioClick * radioClick);
+  }
+}
+
+// ============================================================
+// ESTADO GLOBAL
+// ============================================================
+const pintitas = [];
+const pintitasMap = new Map();
+const categoriasPorRelato = new Map(); // respuesta_id → conteo
+ajustarCanvas();
+window.addEventListener('resize', ajustarCanvas);
+
+let ultimoTiempo = performance.now();
+let hoverX = null, hoverY = null;
+let tiempoGlobal = 0;
+
+// ============================================================
+// LOOP DE RENDER
+// ============================================================
+function render() {
+  const ahora = performance.now();
+  const dt = Math.min(50, ahora - ultimoTiempo);
+  ultimoTiempo = ahora;
+  tiempoGlobal += dt;
+
+  // Respiración global del organismo (~12 segundos por ciclo)
+  const respiracionGlobal = Math.sin(tiempoGlobal * 0.00026);
+
+  // Trail con persistencia ligera (deja estela orgánica sin smudge excesivo)
+  ctx.fillStyle = 'rgba(5, 5, 5, 0.09)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Mezcla de luz para nebulosa orgánica
+  ctx.globalCompositeOperation = 'lighter';
+
+  for (const p of pintitas) {
+    p.actualizar(dt, hoverX, hoverY);
+    p.dibujar(ctx, respiracionGlobal);
+  }
+
+  ctx.globalCompositeOperation = 'source-over';
+
+  requestAnimationFrame(render);
+}
+requestAnimationFrame(render);
+
+// ============================================================
+// INTERACCIÓN
+// ============================================================
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  hoverX = e.clientX - rect.left;
+  hoverY = e.clientY - rect.top;
+});
+canvas.addEventListener('mouseleave', () => { hoverX = null; hoverY = null; });
+
+canvas.addEventListener('click', async (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  let target = null;
+  let mejorDist = Infinity;
+  for (const p of pintitas) {
+    const dx = x - p.x;
+    const dy = y - p.y;
+    const d = dx * dx + dy * dy;
+    const radioClick = p.radioBase * 0.6;
+    if (d < radioClick * radioClick && d < mejorDist) {
+      mejorDist = d;
+      target = p;
+    }
+  }
+  if (target) await abrirRelato(target.respuestaId);
+});
+
+// Touch para móvil
+let touchMoviendose = false;
+canvas.addEventListener('touchstart', (e) => {
+  touchMoviendose = false;
+  const rect = canvas.getBoundingClientRect();
+  const t = e.touches[0];
+  hoverX = t.clientX - rect.left;
+  hoverY = t.clientY - rect.top;
+});
+canvas.addEventListener('touchmove', (e) => {
+  touchMoviendose = true;
+  const rect = canvas.getBoundingClientRect();
+  const t = e.touches[0];
+  hoverX = t.clientX - rect.left;
+  hoverY = t.clientY - rect.top;
+  e.preventDefault();
+}, { passive: false });
+canvas.addEventListener('touchend', async () => {
+  if (!touchMoviendose && hoverX !== null) {
+    let target = null;
+    let mejorDist = Infinity;
+    for (const p of pintitas) {
+      const dx = hoverX - p.x;
+      const dy = hoverY - p.y;
+      const d = dx * dx + dy * dy;
+      const radioClick = p.radioBase * 0.6;
+      if (d < radioClick * radioClick && d < mejorDist) {
+        mejorDist = d;
+        target = p;
+      }
+    }
+    if (target) await abrirRelato(target.respuestaId);
+  }
+  setTimeout(() => { hoverX = null; hoverY = null; }, 600);
+});
+
+// ============================================================
+// MODAL CON RELATO
+// ============================================================
+async function abrirRelato(respuestaId) {
+  try {
+    const res = await fetch(`${API_BASE}/relato/${respuestaId}`);
+    const data = await res.json();
+    if (data.status === 'error') return;
+    document.getElementById('modal-texto').textContent = data.relato || '(sin contenido)';
+    const cats = data.categorias_activadas || {};
+    const chips = Object.keys(cats).map(cat => {
+      const info = CATEGORIAS[cat] || { color: '#888', nombre: cat };
+      return `<span class="modal-cat-chip" style="background:${info.color}">${info.nombre}</span>`;
+    }).join('');
+    document.getElementById('modal-cats').innerHTML = chips;
+    document.getElementById('modal').classList.add('activo');
+  } catch(e) {
+    console.error('Error abriendo relato:', e);
+  }
+}
+function cerrarModal() { document.getElementById('modal').classList.remove('activo'); }
+document.getElementById('modal').addEventListener('click', (e) => {
+  if (e.target.id === 'modal') cerrarModal();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') cerrarModal(); });
+
+// ============================================================
+// LEYENDA
+// ============================================================
+function actualizarLeyenda() {
+  const cont = document.getElementById('leyenda');
+  cont.innerHTML = Object.entries(CATEGORIAS).map(([k, v]) =>
+    `<div class="leyenda-item"><span class="leyenda-dot" style="background:${v.color}"></span>${v.nombre}</div>`
+  ).join('');
+}
+actualizarLeyenda();
+
+// ============================================================
+// CONEXIÓN AL SERVIDOR
+// ============================================================
+let ultimaPintitaId = 0;
+
+// Cuenta cuántas categorías activó cada relato
+function contarCategoriasPorRelato(datos) {
+  const conteo = new Map();
+  for (const p of datos) {
+    conteo.set(p.respuesta_id, (conteo.get(p.respuesta_id) || 0) + 1);
+  }
+  return conteo;
+}
+
+async function inicializar() {
+  try {
+    const res = await fetch(`${API_BASE}/pintitas_recientes?n=2000`);
+    const data = await res.json();
+
+    // Contar categorías por relato ANTES de crear pintitas
+    const conteo = contarCategoriasPorRelato(data);
+    for (const [k, v] of conteo) categoriasPorRelato.set(k, v);
+
+    // Orden cronológico
+    data.reverse();
+    for (const p of data) {
+      if (!pintitasMap.has(p.id)) {
+        const numCats = categoriasPorRelato.get(p.respuesta_id) || 1;
+        const pintita = new Pintita(p.id, p.respuesta_id, p.categoria, numCats);
+        pintitas.push(pintita);
+        pintitasMap.set(p.id, pintita);
+        if (p.id > ultimaPintitaId) ultimaPintitaId = p.id;
+      }
+    }
+    actualizarEstado();
+  } catch(e) {
+    console.error('Error inicializando:', e);
+    marcarSinConexion();
+  }
+}
+
+async function consultarNuevas() {
+  try {
+    const res = await fetch(`${API_BASE}/pintitas_recientes?n=100`);
+    const data = await res.json();
+
+    // Actualizar conteo de categorías con datos nuevos
+    const conteo = contarCategoriasPorRelato(data);
+    for (const [k, v] of conteo) {
+      // Solo actualizar si el conteo es mayor (relato puede tener más pintitas que las traídas previamente)
+      const actual = categoriasPorRelato.get(k) || 0;
+      if (v > actual) categoriasPorRelato.set(k, v);
+    }
+
+    const nuevas = data.filter(p => p.id > ultimaPintitaId);
+    nuevas.reverse();
+    for (const p of nuevas) {
+      if (!pintitasMap.has(p.id)) {
+        setTimeout(() => {
+          const numCats = categoriasPorRelato.get(p.respuesta_id) || 1;
+          const pintita = new Pintita(p.id, p.respuesta_id, p.categoria, numCats);
+          pintitas.push(pintita);
+          pintitasMap.set(p.id, pintita);
+        }, Math.random() * 1500);
+        if (p.id > ultimaPintitaId) ultimaPintitaId = p.id;
+      }
+    }
+    actualizarEstado();
+  } catch(e) {
+    marcarSinConexion();
+  }
+}
+
+async function actualizarEstado() {
+  try {
+    const res = await fetch(`${API_BASE}/estado`);
+    const data = await res.json();
+    document.getElementById('n-respuestas').textContent = data.total_respuestas;
+    document.getElementById('estado-dot').classList.add('vivo');
+    document.getElementById('estado-texto').textContent = 'corpus activo';
+  } catch(e) {
+    marcarSinConexion();
+  }
+}
+
+function marcarSinConexion() {
+  document.getElementById('estado-dot').classList.remove('vivo');
+  document.getElementById('estado-texto').textContent = 'sin conexión';
+}
+
+inicializar();
+setInterval(consultarNuevas, POLL_INTERVAL);
+</script>
+</body>
+</html>
