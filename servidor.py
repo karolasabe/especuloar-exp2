@@ -31,7 +31,7 @@ CATEGORIAS = {
             'hurt','hurts','pain','painful','ache','aching','burning','sharp','cramp'
         ]
     },
-    'materia_metalico_frío_desagradable': {
+    'frio_metal': {
         'color': '#5A8FD4',
         'nombre_es': 'material metálico / frío / desagradable',
         'nombre_en': 'metallic / cold / unpleasant material',
@@ -62,7 +62,7 @@ CATEGORIAS = {
             'warm','soft','gentle','comfortable','smooth','flexible'
         ]
     },
-    'miedo_ansiedad_preocupación': {
+    'miedo_ansiedad': {
         'color': '#9E9E9E',
         'nombre_es': 'miedo / ansiedad / preocupación',
         'nombre_en': 'fear / anxiety / worry',
@@ -94,7 +94,7 @@ CATEGORIAS = {
             'safe','comfortable','calm','relief','trust','gentle','kind','reassured'
         ]
     },
-    'normalizacion_resignación': {
+    'normalizacion': {
         'color': '#6BBF8A',
         'nombre_es': 'normalización / resignación',
         'nombre_en': 'normalization / resignation',
@@ -322,15 +322,7 @@ def cargar_corpus():
             guardar_respuesta(relato, categorias)
             cargados += 1
     return jsonify({'status': 'ok', 'cargados': cargados})
-    @app.route('/limpiar', methods=['POST'])
-def limpiar():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute('DELETE FROM respuestas')
-    conn.execute('DELETE FROM pintitas')
-    conn.commit()
-    conn.close()
-    return jsonify({'status': 'ok', 'mensaje': 'corpus limpiado'})
-    
+
 if __name__ == '__main__':
     print('Servidor Espéculo(ar) exp2 iniciado')
     app.run(debug=True, port=5000)
