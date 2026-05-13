@@ -311,6 +311,18 @@ def obtener_relato(respuesta_id):
         'timestamp': row[2]
     })
 
+@app.route('/cargar_corpus', methods=['POST'])
+def cargar_corpus():
+    datos = request.json or []
+    cargados = 0
+    for r in datos:
+        relato = r.get('relato_experiencia', r.get('relato', ''))
+        if relato:
+            categorias = analizar_relato(relato)
+            guardar_respuesta(relato, categorias)
+            cargados += 1
+    return jsonify({'status': 'ok', 'cargados': cargados})
+
 if __name__ == '__main__':
     print('Servidor Espéculo(ar) exp2 iniciado')
     app.run(debug=True, port=5000)
