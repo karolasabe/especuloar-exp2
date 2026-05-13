@@ -1,19 +1,18 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
-import os
 import sqlite3
-import numpy as np
 from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
 
 DB_PATH = 'corpus.db'
-UMBRAL = 5  # genera síntesis cada 5 respuestas nuevas
+UMBRAL = 5
 
 # ============================================================
 # DICCIONARIO DE CATEGORÍAS - 9 campos semánticos
+# Versión definitiva aprobada
 # ============================================================
 CATEGORIAS = {
     'dolor_fisico': {
@@ -34,8 +33,8 @@ CATEGORIAS = {
     },
     'frio_metal': {
         'color': '#5A8FD4',
-        'nombre_es': 'frío / metal / invasión',
-        'nombre_en': 'cold / metal / invasion',
+        'nombre_es': 'material metálico / frío / desagradable',
+        'nombre_en': 'metallic / cold / unpleasant material',
         'palabras': [
             'frío','fría','frías','fríos','helado','helada','congelado','congelante',
             'metal','metálico','metálica','acero','hierro','inoxidable',
@@ -54,9 +53,9 @@ CATEGORIAS = {
         'nombre_en': 'pleasant / warm materials',
         'palabras': [
             'tibio','tibia','cálido','cálida','caliente','calientito',
-            'suave','suavidad','blando','blanda','flexible',
-            'silicona','goma','algodón','tela',
-            'perfume','aroma','floral',
+            'suave','suavidad','blando','blanda','flexible','morbido',
+            'silicona','goma','plástico blando','algodón','tela',
+            'perfume','aroma','olor agradable','floral',
             'pequeño','pequeña','diminuto','liviano','ligero',
             'ergonómico','ergonómica','adaptable','amigable',
             'reconfortante','confortable','cómodo','cómoda',
@@ -73,7 +72,7 @@ CATEGORIAS = {
             'nervios','nerviosa','nervioso','nerviosismo',
             'temor','temores','temer','pánico','terror','terrorífica',
             'preocupación','preocupada','preocupante',
-            'anticipación','anticipar',
+            'anticipación','anticipar','esperar lo peor',
             'taquicardia','sudor','temblor','temblaba',
             'llorar','lloraba','lloré','llanto','lágrimas',
             'dread','fear','anxiety','panic','terror','scared','nervous','worried'
@@ -88,7 +87,7 @@ CATEGORIAS = {
             'segura','seguridad','confianza','confiable',
             'alivio','aliviada','reconfortada',
             'cómoda','comodidad','bien','bienestar',
-            'amable','gentil','gentileza',
+            'profesional amable','trato amable','gentil','gentileza',
             'explicación','explicó','informó','avisó','preparó',
             'respeto','respetuosa','respetuoso','dignidad',
             'empática','empatía','comprensión','comprensiva',
@@ -105,8 +104,10 @@ CATEGORIAS = {
             'resignada','resignación','resignarse','acostumbrada',
             'tolerable','toleraba','aguantar','aguantaba','soportar','soportaba',
             'trámite','obligación','obligatoria','deber',
+            'siempre es así','así es','así funciona',
+            'nada nuevo','lo de siempre','ya sé cómo es',
             'inevitable','inevitablemente',
-            'normal','routine','necessary','tolerate','endure','resign','accept'
+            'routine','necessary','tolerate','endure','resign','accept'
         ]
     },
     'vivencia_sexual_traumatica': {
@@ -131,8 +132,7 @@ CATEGORIAS = {
         'nombre_en': 'male healthcare professional',
         'palabras': [
             'médico','doctor','ginecólogo','especialista hombre',
-            'él atendió','él me dijo','él me hizo','él me revisó',
-            'male doctor','male physician','he examined','he told me'
+            'él','su nombre masculino'
         ]
     },
     'profesional_femenino': {
@@ -141,8 +141,7 @@ CATEGORIAS = {
         'nombre_en': 'female healthcare professional',
         'palabras': [
             'médica','doctora','ginecóloga','matrona','obstétrica',
-            'ella atendió','ella me dijo','ella me hizo','ella me revisó',
-            'female doctor','midwife','she examined','she told me'
+            'ella','su nombre femenino'
         ]
     }
 }
@@ -158,8 +157,7 @@ def init_db():
         timestamp TEXT,
         relato TEXT,
         idioma TEXT,
-        categorias_activadas TEXT,
-        intensidades TEXT
+        categorias_activadas TEXT
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS pintitas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,41 +176,42 @@ with app.app_context():
 # ANÁLISIS SEMÁNTICO
 # ============================================================
 def analizar_relato(texto):
+    """
+    Devuelve un diccionario con las categorías activadas y su intensidad.
+    Una categoría se activa si al menos una de sus palabras aparece en el texto.
+    La intensidad depende de cuántas palabras de esa categoría aparecen.
+    Cada categoría activada generará una pintita independiente.
+    """
     texto_lower = texto.lower()
     resultado = {}
     for cat, datos in CATEGORIAS.items():
         menciones = sum(1 for p in datos['palabras'] if p in texto_lower)
         if menciones > 0:
-            # Intensidad: normalizada por longitud del texto
-            palabras_texto = len(texto.split())
-            intensidad = min(1.0, menciones / max(1, palabras_texto / 20))
+            palabras_texto = max(1, len(texto.split()))
+            intensidad = min(1.0, menciones / (palabras_texto / 20))
             resultado[cat] = round(intensidad, 3)
     return resultado
 
 def detectar_idioma(texto):
     palabras_es = ['que','con','una','por','para','como','pero','los','las','del']
     palabras_en = ['the','and','that','with','for','this','but','are','was','have']
-    score_es = sum(1 for p in palabras_es if f' {p} ' in f' {texto.lower()} ')
-    score_en = sum(1 for p in palabras_en if f' {p} ' in f' {texto.lower()} ')
+    texto_low = f' {texto.lower()} '
+    score_es = sum(1 for p in palabras_es if f' {p} ' in texto_low)
+    score_en = sum(1 for p in palabras_en if f' {p} ' in texto_low)
     return 'es' if score_es >= score_en else 'en'
 
 # ============================================================
-# GUARDAR RESPUESTA Y PINTITAS
+# GUARDAR
 # ============================================================
 def guardar_respuesta(relato, categorias_activadas):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     idioma = detectar_idioma(relato)
     c.execute('''INSERT INTO respuestas
-        (timestamp, relato, idioma, categorias_activadas, intensidades)
-        VALUES (?,?,?,?,?)''',
-        (datetime.now().isoformat(),
-         relato,
-         idioma,
-         json.dumps(list(categorias_activadas.keys())),
-         json.dumps(categorias_activadas)))
+        (timestamp, relato, idioma, categorias_activadas)
+        VALUES (?,?,?,?)''',
+        (datetime.now().isoformat(), relato, idioma, json.dumps(categorias_activadas)))
     respuesta_id = c.lastrowid
-    # Crear una pintita por cada categoría activada
     for cat, intensidad in categorias_activadas.items():
         c.execute('''INSERT INTO pintitas
             (respuesta_id, categoria, intensidad, timestamp)
@@ -233,18 +232,17 @@ def webhook():
     relato = ''
     if 'data' in datos:
         for field in datos.get('data', {}).get('fields', []):
-            if field.get('type') == 'TEXTAREA':
-                relato = field.get('value', '')
-                break
+            if field.get('type') in ('TEXTAREA', 'INPUT_TEXT'):
+                valor = field.get('value', '')
+                if valor and len(valor) > len(relato):
+                    relato = valor
     if not relato:
         relato = datos.get('relato', datos.get('texto', datos.get('story', '')))
-
     if not relato:
         return jsonify({'status': 'error', 'mensaje': 'sin relato'}), 400
 
     categorias = analizar_relato(relato)
     respuesta_id, n_total = guardar_respuesta(relato, categorias)
-
     return jsonify({
         'status': 'ok',
         'id': respuesta_id,
@@ -255,6 +253,8 @@ def webhook():
 
 @app.route('/estado', methods=['GET'])
 def estado():
+    """Estado del corpus. Sin categoria_dominante.
+    La lógica de esta versión es que cada pintita es independiente."""
     conn = sqlite3.connect(DB_PATH)
     n_respuestas = conn.execute('SELECT COUNT(*) FROM respuestas').fetchone()[0]
     pintitas = conn.execute(
@@ -273,8 +273,7 @@ def estado():
 
     return jsonify({
         'total_respuestas': n_respuestas,
-        'pintitas': datos_pintitas,
-        'categoria_dominante': datos_pintitas[0]['categoria'] if datos_pintitas else ''
+        'pintitas': datos_pintitas
     })
 
 @app.route('/pintitas_recientes', methods=['GET'])
@@ -282,16 +281,35 @@ def pintitas_recientes():
     n = int(request.args.get('n', 20))
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute(
-        'SELECT categoria, intensidad, timestamp FROM pintitas ORDER BY id DESC LIMIT ?', (n,)
+        'SELECT id, respuesta_id, categoria, intensidad, timestamp FROM pintitas ORDER BY id DESC LIMIT ?', (n,)
     ).fetchall()
     conn.close()
     return jsonify([{
-        'categoria': r[0],
-        'intensidad': r[1],
-        'color': CATEGORIAS.get(r[0], {}).get('color', '#888'),
-        'nombre_es': CATEGORIAS.get(r[0], {}).get('nombre_es', r[0]),
-        'timestamp': r[2]
+        'id': r[0],
+        'respuesta_id': r[1],
+        'categoria': r[2],
+        'intensidad': r[3],
+        'color': CATEGORIAS.get(r[2], {}).get('color', '#888'),
+        'nombre_es': CATEGORIAS.get(r[2], {}).get('nombre_es', r[2]),
+        'timestamp': r[4]
     } for r in rows])
+
+@app.route('/relato/<int:respuesta_id>', methods=['GET'])
+def obtener_relato(respuesta_id):
+    """Devuelve el relato completo para trazabilidad desde el display."""
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        'SELECT relato, categorias_activadas, timestamp FROM respuestas WHERE id = ?',
+        (respuesta_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'status': 'error', 'mensaje': 'no encontrado'}), 404
+    return jsonify({
+        'relato': row[0],
+        'categorias_activadas': json.loads(row[1]) if row[1] else {},
+        'timestamp': row[2]
+    })
 
 @app.route('/cargar_corpus', methods=['POST'])
 def cargar_corpus():
