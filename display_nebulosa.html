@@ -206,10 +206,10 @@ function hexToRgb(hex) {
 }
 
 // Tamaño y opacidad uniformes para todas las pintitas
-// Opacidad muy baja para evitar acumulación a blanco con todas las categorías activas
-// Las pintitas deben verse como partículas etéreas, no como masas sólidas
+// Con modo lighten, la opacidad debe ser mayor porque no hay acumulación
+// Los colores se ven claramente sin riesgo de saturación a blanco
 const RADIO_UNIFORME = 68;
-const OPACIDAD_UNIFORME = 0.048;
+const OPACIDAD_UNIFORME = 0.5;
 
 class Pintita {
   constructor(id, respuestaId, categoria, esNueva = false) {
@@ -258,8 +258,8 @@ class Pintita {
   recalcularBase() {
     const zona = ZONAS[this.categoria];
     if (!zona) { this.bx = W * 0.5; this.by = H * 0.5; return; }
-    // Dispersión: pintitas próximas pero no completamente traslapadas
-    const dispersion = Math.min(W, H) * 0.18;
+    // Dispersión moderada: cada color se mantiene en su zona, evitando solapamiento excesivo
+    const dispersion = Math.min(W, H) * 0.13;
     const r = this.semillaRad * dispersion;
     this.bx = zona.x + Math.cos(this.semillaAng) * r;
     this.by = zona.y + Math.sin(this.semillaAng) * r;
@@ -394,7 +394,7 @@ let ultimoMouseTime = performance.now();
 function actualizarZonas(tiempoGlobal) {
   const cx = W * 0.5, cy = H * 0.5;
   // Radio mayor: las zonas están más separadas, menos solapamiento → menos blanco
-  const radioBase = Math.min(W, H) * 0.34;
+  const radioBase = Math.min(W, H) * 0.38;
   const cats = Object.keys(CATEGORIAS);
 
   // Categorías visibles para redistribuir el espacio
@@ -471,8 +471,9 @@ function render() {
   ctx.fillStyle = 'rgba(5, 5, 5, 0.09)';
   ctx.fillRect(0, 0, W, H);
 
-  // Modo screen: mezcla de luz con ceiling natural
-  ctx.globalCompositeOperation = 'screen';
+  // Modo lighten: cada canal toma el valor más brillante entre lo existente y lo nuevo.
+  // Esto evita la acumulación a blanco - los colores se respetan sin sumarse.
+  ctx.globalCompositeOperation = 'lighten';
 
   for (const p of pintitas) {
     p.recalcularBase(); // las zonas se movieron, las bases también
