@@ -58,7 +58,6 @@
     opacity: 0.6;
   }
 
-  /* Modal con el relato */
   #modal {
     position: fixed; inset: 0; z-index: 100;
     display: none; align-items: center; justify-content: center;
@@ -150,13 +149,9 @@ const CATEGORIAS = {
   'profesional_femenino':      { color: '#D4B800', nombre: 'Profesional mujer' }
 };
 
-// Estado de filtros: true = visible, false = oculta
 const filtrosActivos = {};
 for (const cat of Object.keys(CATEGORIAS)) filtrosActivos[cat] = true;
 
-const MAX_CATEGORIAS = Object.keys(CATEGORIAS).length; // 9
-
-// Zonas radiales por categoría
 let ZONAS = {};
 function calcularZonas() {
   const cx = W * 0.5, cy = H * 0.5;
@@ -196,7 +191,7 @@ function ajustarCanvas() {
 }
 
 // ============================================================
-// PINTITA — partícula nebulosa
+// PINTITA
 // ============================================================
 function hexToRgb(hex) {
   const r = parseInt(hex.slice(1, 3), 16);
@@ -205,11 +200,11 @@ function hexToRgb(hex) {
   return { r, g, b };
 }
 
-// Tamaño y opacidad uniformes para todas las pintitas
-// Opacidad muy baja para evitar acumulación a blanco con todas las categorías activas
-// Las pintitas deben verse como partículas etéreas, no como masas sólidas
 const RADIO_UNIFORME = 68;
 const OPACIDAD_UNIFORME = 0.048;
+
+// Duración del modo "agitado": tiempo de desorden antes de reagruparse
+const DURACION_AGITACION = 2800; // ms
 
 class Pintita {
   constructor(id, respuestaId, categoria, esNueva = false) {
@@ -220,7 +215,6 @@ class Pintita {
     this.color = CATEGORIAS[categoria]?.color || '#888';
     this.rgb = hexToRgb(this.color);
 
-    // Semilla angular y radial: distribución pareja para formar un área amplia
     this.semillaAng = Math.random() * Math.PI * 2;
     this.semillaRad = Math.sqrt(Math.random());
 
@@ -228,12 +222,9 @@ class Pintita {
     this.recalcularBase();
     this.x = this.bx; this.y = this.by;
 
-    // Offset por repulsión y dinámica
     this.ox = 0; this.oy = 0;
     this.ovx = 0; this.ovy = 0;
 
-    // Si es una pintita nueva (llega desde el webhook), aparece en posición
-    // aleatoria dentro del canvas y viaja lentamente hacia su masa de color
     if (esNueva) {
       const xRandom = Math.random() * W;
       const yRandom = Math.random() * H;
@@ -244,13 +235,14 @@ class Pintita {
     this.radioBase = RADIO_UNIFORME;
     this.opacidadBase = OPACIDAD_UNIFORME;
 
-    // Filtro: opacidad multiplicativa controlada por las categorías visibles
     this.opacidadFiltro = 1;
     this.opacidadFiltroObjetivo = filtrosActivos[categoria] ? 1 : 0;
 
-    // Respiración propia más rápida y variable (sensación etérea)
     this.fase = Math.random() * Math.PI * 2;
     this.velFase = 0.0005 + Math.random() * 0.0012;
+
+    // Estado de agitación: tiempo restante en ms de "modo desordenado"
+    this.tiempoAgitacion = 0;
 
     this.edad = 0;
   }
@@ -258,7 +250,6 @@ class Pintita {
   recalcularBase() {
     const zona = ZONAS[this.categoria];
     if (!zona) { this.bx = W * 0.5; this.by = H * 0.5; return; }
-    // Dispersión: pintitas próximas pero no completamente traslapadas
     const dispersion = Math.min(W, H) * 0.18;
     const r = this.semillaRad * dispersion;
     this.bx = zona.x + Math.cos(this.semillaAng) * r;
@@ -269,8 +260,12 @@ class Pintita {
     this.edad += dt;
     this.fase += this.velFase * dt;
 
+    // Decay del tiempo de agitación
+    if (this.tiempoAgitacion > 0) {
+      this.tiempoAgitacion = Math.max(0, this.tiempoAgitacion - dt);
+    }
+
     // Sin reacción al hover estático. Solo se disgregan al agitar.
-    // Umbral más bajo para que el movimiento del mouse se perciba claramente
     const UMBRAL_AGITACION = 180;
     if (hoverX !== null && mouseVel > UMBRAL_AGITACION) {
       const dx = (this.bx + this.ox) - hoverX;
@@ -280,17 +275,24 @@ class Pintita {
       if (distSq < radioInfluencia * radioInfluencia && distSq > 1) {
         const dist = Math.sqrt(distSq);
         const factorDist = (radioInfluencia - dist) / radioInfluencia;
-        // Fuerza proporcional a velocidad, con rango mayor
         const velExceso = Math.min(2.8, (mouseVel - UMBRAL_AGITACION) / 350);
         const fuerza = factorDist * velExceso * 0.7;
         this.ovx += (dx / dist) * fuerza;
         this.ovy += (dy / dist) * fuerza;
+
+        // Si recibió fuerza significativa, entra en modo agitado durante varios segundos
+        if (fuerza > 0.04) {
+          this.tiempoAgitacion = DURACION_AGITACION;
+        }
       }
     }
 
-    // Atracción muy débil al centroide del mismo color
-    // Lo suficiente para reconocer agrupación cromática sin encapsular en bollo
-    if (centroides) {
+    // Factor de agitación: 1.0 cuando recién agitada, 0 cuando ya se asentó
+    const factorAgitacion = this.tiempoAgitacion / DURACION_AGITACION;
+    const enScatter = factorAgitacion > 0;
+
+    // Atracción al centroide del mismo color, desactivada mientras está en scatter
+    if (centroides && !enScatter) {
       const c = centroides[this.categoria];
       if (c && c.count > 1) {
         const dx = c.x - this.x;
@@ -301,24 +303,27 @@ class Pintita {
       }
     }
 
-    // Resorte muy suave hacia la base (permite deriva orgánica)
-    const k = 0.0055;
-    this.ovx -= this.ox * k;
-    this.ovy -= this.oy * k;
+    // Resorte: muy débil mientras está en scatter, normal cuando ya se asentó
+    // Esto permite que las pintitas permanezcan separadas durante varios segundos
+    const kBase = 0.0055;
+    const kEfectivo = kBase * (1 - factorAgitacion * 0.95);
+    this.ovx -= this.ox * kEfectivo;
+    this.ovy -= this.oy * kEfectivo;
 
-    // Damping moderado: permite movimiento más libre
-    this.ovx *= 0.955;
-    this.ovy *= 0.955;
+    // Damping: ligeramente mayor cuando está en scatter (decae más lento la velocidad)
+    const dampingBase = 0.955;
+    const dampingEfectivo = dampingBase + factorAgitacion * 0.018;
+    this.ovx *= dampingEfectivo;
+    this.ovy *= dampingEfectivo;
 
-    // Ruido browniano aplicado a la velocidad (movimiento fluido, no instantáneo)
+    // Ruido browniano fluido
     this.ovx += (Math.random() - 0.5) * 0.025;
     this.ovy += (Math.random() - 0.5) * 0.025;
 
-    // Integrar offset
     this.ox += this.ovx;
     this.oy += this.ovy;
 
-    // Interpolación suave de la opacidad de filtro
+    // Interpolación suave del filtro de visibilidad
     this.opacidadFiltro += (this.opacidadFiltroObjetivo - this.opacidadFiltro) * 0.05;
 
     this.x = this.bx + this.ox;
@@ -326,32 +331,30 @@ class Pintita {
   }
 
   dibujar(ctx, respiracionGlobal) {
-    // Si está filtrada hacia 0, no dibujar
     if (this.opacidadFiltro < 0.005) return;
 
-    // Respiración: amplitud reducida (menos profunda) y más expandida
-    // El ciclo es más breve, el organismo respira con frecuencia mayor
     const respiraPropio = Math.sin(this.fase) * 2.5;
     const respiraGlobal = respiracionGlobal * 3.5;
     const radio = Math.max(2, this.radioBase + respiraPropio + respiraGlobal);
 
-    // Pulso colectivo de opacidad muy sutil
     const pulsoOpacidad = 1 + respiracionGlobal * 0.08;
-
-    // Fade-in lento al aparecer
     const opacidadFade = Math.min(1, this.edad / 6000);
     const opacidad = this.opacidadBase * opacidadFade * pulsoOpacidad * this.opacidadFiltro;
 
-    // Gradiente con caída exponencial suave (sin anillos visibles)
+    // Gradiente raised cosine: 11 stops, derivada cero en los extremos
+    // Esto elimina los anillos perceptuales que generaban los stops discretos
     const r = this.rgb.r, g = this.rgb.g, b = this.rgb.b;
     const grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, radio);
-    grad.addColorStop(0,    `rgba(${r}, ${g}, ${b}, ${opacidad})`);
-    grad.addColorStop(0.12, `rgba(${r}, ${g}, ${b}, ${opacidad * 0.94})`);
-    grad.addColorStop(0.25, `rgba(${r}, ${g}, ${b}, ${opacidad * 0.78})`);
-    grad.addColorStop(0.4,  `rgba(${r}, ${g}, ${b}, ${opacidad * 0.55})`);
-    grad.addColorStop(0.55, `rgba(${r}, ${g}, ${b}, ${opacidad * 0.32})`);
-    grad.addColorStop(0.7,  `rgba(${r}, ${g}, ${b}, ${opacidad * 0.15})`);
-    grad.addColorStop(0.85, `rgba(${r}, ${g}, ${b}, ${opacidad * 0.05})`);
+    grad.addColorStop(0,    `rgba(${r}, ${g}, ${b}, ${opacidad * 1.000})`);
+    grad.addColorStop(0.1,  `rgba(${r}, ${g}, ${b}, ${opacidad * 0.976})`);
+    grad.addColorStop(0.2,  `rgba(${r}, ${g}, ${b}, ${opacidad * 0.905})`);
+    grad.addColorStop(0.3,  `rgba(${r}, ${g}, ${b}, ${opacidad * 0.794})`);
+    grad.addColorStop(0.4,  `rgba(${r}, ${g}, ${b}, ${opacidad * 0.655})`);
+    grad.addColorStop(0.5,  `rgba(${r}, ${g}, ${b}, ${opacidad * 0.500})`);
+    grad.addColorStop(0.6,  `rgba(${r}, ${g}, ${b}, ${opacidad * 0.345})`);
+    grad.addColorStop(0.7,  `rgba(${r}, ${g}, ${b}, ${opacidad * 0.206})`);
+    grad.addColorStop(0.8,  `rgba(${r}, ${g}, ${b}, ${opacidad * 0.095})`);
+    grad.addColorStop(0.9,  `rgba(${r}, ${g}, ${b}, ${opacidad * 0.024})`);
     grad.addColorStop(1,    `rgba(${r}, ${g}, ${b}, 0)`);
 
     ctx.fillStyle = grad;
@@ -360,7 +363,6 @@ class Pintita {
     ctx.fill();
   }
 
-  // Detección de click sobre la mancha
   contiene(x, y) {
     const dx = x - this.x;
     const dy = y - this.y;
@@ -381,23 +383,18 @@ let ultimoTiempo = performance.now();
 let hoverX = null, hoverY = null;
 let tiempoGlobal = 0;
 
-// Velocidad del mouse (para intensidad de separación)
 let mouseVel = 0;
 let mousePrevX = null, mousePrevY = null;
 let ultimoMouseTime = performance.now();
 
 // ============================================================
-// MOVIMIENTO ORGÁNICO DE LAS ZONAS Y AGRUPACIÓN POR COLOR
+// MOVIMIENTO ORGÁNICO DE ZONAS
 // ============================================================
-// Las zonas oscilan lentamente como células vivas
-// Cuando hay filtros activos, las zonas restantes se redistribuyen en el círculo
 function actualizarZonas(tiempoGlobal) {
   const cx = W * 0.5, cy = H * 0.5;
-  // Radio mayor: las zonas están más separadas, menos solapamiento → menos blanco
   const radioBase = Math.min(W, H) * 0.34;
   const cats = Object.keys(CATEGORIAS);
 
-  // Categorías visibles para redistribuir el espacio
   const activas = cats.filter(c => filtrosActivos[c]);
   const nActivas = activas.length || 1;
   const indicesActivos = {};
@@ -422,7 +419,6 @@ function actualizarZonas(tiempoGlobal) {
   });
 }
 
-// Calcula centroide de cada categoría (para atracción interna del grupo)
 function calcularCentroides(pintitas) {
   const centroides = {};
   for (const cat of Object.keys(CATEGORIAS)) {
@@ -455,27 +451,20 @@ function render() {
   ultimoTiempo = ahora;
   tiempoGlobal += dt;
 
-  // Decay de la velocidad del mouse cuando no se mueve
   mouseVel *= Math.pow(0.92, dt / 16);
 
-  // Respiración global más rápida y menos profunda (~7 segundos por ciclo)
   const respiracionGlobal = Math.sin(tiempoGlobal * 0.00045);
 
-  // Las zonas derivan lentamente como células
   actualizarZonas(tiempoGlobal);
-
-  // Centroides de color para la cohesión grupal
   const centroides = calcularCentroides(pintitas);
 
-  // Trail con persistencia ligera (estela orgánica)
   ctx.fillStyle = 'rgba(5, 5, 5, 0.09)';
   ctx.fillRect(0, 0, W, H);
 
-  // Modo screen: mezcla de luz con ceiling natural
   ctx.globalCompositeOperation = 'screen';
 
   for (const p of pintitas) {
-    p.recalcularBase(); // las zonas se movieron, las bases también
+    p.recalcularBase();
     p.actualizar(dt, hoverX, hoverY, mouseVel, centroides);
     p.dibujar(ctx, respiracionGlobal);
   }
@@ -494,14 +483,13 @@ canvas.addEventListener('mousemove', (e) => {
   const newX = e.clientX - rect.left;
   const newY = e.clientY - rect.top;
 
-  // Calcular velocidad del mouse
   if (mousePrevX !== null) {
     const ahora = performance.now();
     const dt = Math.max(1, ahora - ultimoMouseTime);
     const dx = newX - mousePrevX;
     const dy = newY - mousePrevY;
     const v = Math.sqrt(dx * dx + dy * dy) / dt * 1000;
-    mouseVel = mouseVel * 0.6 + v * 0.4; // smoothing
+    mouseVel = mouseVel * 0.6 + v * 0.4;
     ultimoMouseTime = ahora;
   }
   mousePrevX = newX;
@@ -530,7 +518,6 @@ canvas.addEventListener('click', async (e) => {
   if (target) await abrirRelato(target.respuestaId);
 });
 
-// Touch para móvil
 let touchMoviendose = false;
 canvas.addEventListener('touchstart', (e) => {
   touchMoviendose = false;
@@ -546,7 +533,6 @@ canvas.addEventListener('touchmove', (e) => {
   const newX = t.clientX - rect.left;
   const newY = t.clientY - rect.top;
 
-  // Velocidad del touch
   if (mousePrevX !== null) {
     const ahora = performance.now();
     const dt = Math.max(1, ahora - ultimoMouseTime);
@@ -582,7 +568,7 @@ canvas.addEventListener('touchend', async () => {
 });
 
 // ============================================================
-// MODAL CON RELATO
+// MODAL
 // ============================================================
 async function abrirRelato(respuestaId) {
   try {
@@ -608,12 +594,10 @@ document.getElementById('modal').addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') cerrarModal(); });
 
 // ============================================================
-// LEYENDA INTERACTIVA - filtrado por categoría
+// LEYENDA INTERACTIVA
 // ============================================================
 function clickCategoria(cat, soloEsta) {
   if (soloEsta) {
-    // Shift+click: mostrar SOLO esta categoría
-    // Si ya es la única visible, restaurar todas
     const yaEsSolo = filtrosActivos[cat] &&
       Object.entries(filtrosActivos).every(([k, v]) => k === cat ? v : !v);
     if (yaEsSolo) {
@@ -622,10 +606,8 @@ function clickCategoria(cat, soloEsta) {
       for (const k of Object.keys(filtrosActivos)) filtrosActivos[k] = (k === cat);
     }
   } else {
-    // Click normal: toggle
     filtrosActivos[cat] = !filtrosActivos[cat];
   }
-  // Actualizar objetivo de cada pintita
   for (const p of pintitas) {
     p.opacidadFiltroObjetivo = filtrosActivos[p.categoria] ? 1 : 0;
   }
@@ -664,8 +646,6 @@ async function inicializar() {
   try {
     const res = await fetch(`${API_BASE}/pintitas_recientes?n=2000`);
     const data = await res.json();
-
-    // Orden cronológico
     data.reverse();
     for (const p of data) {
       if (!pintitasMap.has(p.id)) {
@@ -686,13 +666,11 @@ async function consultarNuevas() {
   try {
     const res = await fetch(`${API_BASE}/pintitas_recientes?n=100`);
     const data = await res.json();
-
     const nuevas = data.filter(p => p.id > ultimaPintitaId);
     nuevas.reverse();
     for (const p of nuevas) {
       if (!pintitasMap.has(p.id)) {
         setTimeout(() => {
-          // esNueva = true → aparece fuera del canvas y es atraída a su zona
           const pintita = new Pintita(p.id, p.respuesta_id, p.categoria, true);
           pintitas.push(pintita);
           pintitasMap.set(p.id, pintita);
@@ -727,7 +705,7 @@ inicializar();
 setInterval(consultarNuevas, POLL_INTERVAL);
 
 // ============================================================
-// SHAKE DEL TELÉFONO: agitar para expandir la nebulosa
+// SHAKE DEL TELÉFONO
 // ============================================================
 let ultimoShakeTime = 0;
 let motionActivo = false;
@@ -755,23 +733,22 @@ function activarMovimiento() {
           const dist = Math.sqrt(dx * dx + dy * dy) || 1;
           p.ovx += (dx / dist) * intensidad;
           p.ovy += (dy / dist) * intensidad;
+          // El shake también activa el modo agitado
+          p.tiempoAgitacion = DURACION_AGITACION;
         }
       }
     }
   });
-  // Esconder el botón una vez activado
   const btn = document.getElementById('btn-motion');
   if (btn) btn.style.display = 'none';
 }
 
-// Detectar si es dispositivo táctil y necesita permiso (iOS 13+)
 const esTouch = 'ontouchstart' in window;
 const necesitaPermiso = (typeof DeviceMotionEvent !== 'undefined' &&
                          typeof DeviceMotionEvent.requestPermission === 'function');
 
 if (esTouch) {
   if (necesitaPermiso) {
-    // Crear botón flotante para solicitar permiso (iOS)
     const btn = document.createElement('button');
     btn.id = 'btn-motion';
     btn.textContent = 'tocar para activar movimiento';
@@ -797,7 +774,6 @@ if (esTouch) {
     });
     document.body.appendChild(btn);
   } else if (typeof DeviceMotionEvent !== 'undefined') {
-    // Android y otros: activar directamente sin pedir permiso
     activarMovimiento();
   }
 }
