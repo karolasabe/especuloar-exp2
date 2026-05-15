@@ -259,12 +259,12 @@ for (const [cat, info] of Object.entries(CATEGORIAS)) {
 //   2) CHISPA (sólo al agitar o al integrarse): nodo individual definido encima
 //      de la masa. Revela que hay relatos puntuales dentro del fluido.
 // ============================================================
-const BLOB_RADIO_BASE = 26;       // radio del círculo sólido (mundo). Se expande por blur
-const BLOB_ALPHA = 0.92;          // alfa al pintar el círculo en la capa fluida
-const BLUR_PX = 22;               // pixels de pantalla (escalado por cam.scale)
-const CONTRAST_AMOUNT = 22;       // dureza del borde de fusión
-const RADIO_CHISPA = 22;
-const OPACIDAD_CHISPA = 0.45;
+const BLOB_RADIO_BASE = 18;       // radio del círculo sólido (mundo)
+const BLOB_ALPHA = 0.42;          // alfa moderado: el blur+contrast define los bordes sin bleachar
+const BLUR_PX = 9;                // suficiente para fusionar vecinos sin desvanecer todo
+const CONTRAST_AMOUNT = 5;        // moderado: bordes definidos sin saturar a blanco
+const RADIO_CHISPA = 18;
+const OPACIDAD_CHISPA = 0.30;
 const DURACION_AGITACION = 2800;
 const DURACION_INTEGRACION = 9000;
 
@@ -273,8 +273,8 @@ const ATRACCION_DIST = 215;
 const ATRACCION_FUERZA = 0.0016;
 const REPULSION_CERCANA_DIST = 28;
 const REPULSION_CERCANA_FUERZA = 0.052;
-const REPULSION_INTER_DIST = 90;        // amplio: las gotas de distinto color se mantienen separadas
-const REPULSION_INTER_FUERZA = 0.0050;
+const REPULSION_INTER_DIST = 105;       // zonas de color claramente separadas
+const REPULSION_INTER_FUERZA = 0.0058;
 
 class Pintita {
   constructor(id, respId, cat, esNueva = false) {
@@ -316,7 +316,9 @@ class Pintita {
     this.velFase = 0.0005 + Math.random() * 0.001;
 
     this.tiempoAgitacion = 0;
-    this.edad = 0;
+    // Pintitas iniciales del corpus: ya están integradas (no chispan al cargar)
+    // Solo las que llegan en vivo (esNueva) muestran la chispa de integración
+    this.edad = esNueva ? 0 : DURACION_INTEGRACION + 1;
   }
 
   actualizar(dt, hwx, hwy, mouseVel, vecinos, isDragging) {
@@ -579,8 +581,8 @@ function render() {
 
     // Radio del círculo sólido en pixels de pantalla (escala con cámara)
     const escalaResp = Math.sqrt(p.tamFactor);
-    const respProp = Math.sin(p.fase) * 1.4 * escalaResp;
-    const respGlob = resp * 1.8 * escalaResp;
+    const respProp = Math.sin(p.fase) * 0.9 * escalaResp;
+    const respGlob = resp * 1.2 * escalaResp;
     const radioMundo = BLOB_RADIO_BASE * p.tamFactor + respProp + respGlob;
     const sr = radioMundo * cam.scale;
 
@@ -609,7 +611,8 @@ function render() {
 
   // CAPA 2: CHISPAS (nodos individuales revelados)
   // Solo se dibujan cuando la pintita está agitada o es reciente
-  ctx.globalCompositeOperation = 'screen';
+  // source-over (no screen): evita acumulación hacia blanco
+  ctx.globalCompositeOperation = 'source-over';
   for (const p of pintitas) {
     if (p.opacidadFiltro < 0.005) continue;
     const fAgit = p.tiempoAgitacion / DURACION_AGITACION;
@@ -631,7 +634,6 @@ function render() {
       radioChispa * 2, radioChispa * 2);
   }
   ctx.globalAlpha = 1;
-  ctx.globalCompositeOperation = 'source-over';
 
   requestAnimationFrame(render);
 }
