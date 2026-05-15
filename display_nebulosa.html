@@ -160,15 +160,15 @@ window.addEventListener('resize', ajustarCanvas);
 
 // ============================================================
 // FACTOR DE MUNDO
-// Crece con el número de relatos para acomodar más voces
+// Crece con el número de relatos. Mundo circular sin paredes rectangulares
 // ============================================================
 let totalRelatos = 64;
 function getWorldFactor() {
   return Math.sqrt(Math.max(64, totalRelatos) / 64);
 }
-function getWorldSize() {
-  const wf = getWorldFactor();
-  return { w: 2400 * wf, h: 1500 * wf };
+function getWorldRadius() {
+  // Radio del mundo circular. Mantiene densidad constante: más relatos → más radio
+  return 600 * getWorldFactor();
 }
 
 // ============================================================
@@ -192,10 +192,11 @@ function screenToWorld(sx, sy) {
 }
 
 function ajustarCamaraInicial() {
-  const ws = getWorldSize();
-  const scale = Math.min(W / ws.w, H / ws.h) * 0.95;
+  // Escala fija para que las pintitas se vean a tamaño natural y legible
+  // No ajusta para "ver todo el mundo" — eso comprime y muestra las paredes
+  // Con mundo pequeño verás casi todo; con mundo grande deberás navegar
   cam.tx = 0; cam.ty = 0;
-  cam.tscale = Math.max(cam.MIN_SCALE, Math.min(0.9, scale));
+  cam.tscale = 0.55;
   cam.x = cam.tx; cam.y = cam.ty; cam.scale = cam.tscale;
 }
 
@@ -219,17 +220,18 @@ function crearGradiente(rgb) {
   off.height = tam;
   const c = off.getContext('2d');
   const grd = c.createRadialGradient(tam/2, tam/2, 0, tam/2, tam/2, tam/2);
-  // Raised cosine: derivada cero en los extremos → sin anillos visibles
+  // Raised cosine al cuadrado: caída más rápida, centro más definido
+  // Sigue siendo C¹ continuo (derivada cero en los extremos) → sin anillos visibles
   grd.addColorStop(0,    `rgba(${rgb.r},${rgb.g},${rgb.b},1.000)`);
-  grd.addColorStop(0.1,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.976)`);
-  grd.addColorStop(0.2,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.905)`);
-  grd.addColorStop(0.3,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.794)`);
-  grd.addColorStop(0.4,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.655)`);
-  grd.addColorStop(0.5,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.500)`);
-  grd.addColorStop(0.6,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.345)`);
-  grd.addColorStop(0.7,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.206)`);
-  grd.addColorStop(0.8,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.095)`);
-  grd.addColorStop(0.9,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.024)`);
+  grd.addColorStop(0.1,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.953)`);
+  grd.addColorStop(0.2,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.819)`);
+  grd.addColorStop(0.3,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.630)`);
+  grd.addColorStop(0.4,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.429)`);
+  grd.addColorStop(0.5,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.250)`);
+  grd.addColorStop(0.6,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.119)`);
+  grd.addColorStop(0.7,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.042)`);
+  grd.addColorStop(0.8,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.009)`);
+  grd.addColorStop(0.9,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.001)`);
   grd.addColorStop(1,    `rgba(${rgb.r},${rgb.g},${rgb.b},0)`);
   c.fillStyle = grd;
   c.fillRect(0, 0, tam, tam);
@@ -244,17 +246,18 @@ for (const [cat, info] of Object.entries(CATEGORIAS)) {
 // ============================================================
 // PINTITA — partícula con flocking en espacio-mundo
 // ============================================================
-const RADIO_BASE = 70;
-const OPACIDAD_BASE = 0.058;
+const RADIO_BASE = 52;
+const OPACIDAD_BASE = 0.072;
 const DURACION_AGITACION = 2800;
 
-// Rangos de flocking en unidades-mundo
-const ATRACCION_DIST = 320;
-const REPULSION_CERCANA_DIST = 32;
-const REPULSION_INTER_DIST = 50;
-const ATRACCION_FUERZA = 0.0015;
-const REPULSION_CERCANA_FUERZA = 0.055;
-const REPULSION_INTER_FUERZA = 0.0009;
+// Flocking calibrado para clusters múltiples estables sin colapso global
+// Inspirado en el display.html original pero en unidades-mundo
+const ATRACCION_DIST = 215;          // alcance corto → no agrupa todo en uno solo
+const ATRACCION_FUERZA = 0.0009;     // suave
+const REPULSION_CERCANA_DIST = 28;
+const REPULSION_CERCANA_FUERZA = 0.052;
+const REPULSION_INTER_DIST = 58;
+const REPULSION_INTER_FUERZA = 0.0042; // fuerte para mantener clusters separados
 
 class Pintita {
   constructor(id, respId, cat, esNueva = false) {
@@ -262,26 +265,28 @@ class Pintita {
     this.respuestaId = respId;
     this.categoria = cat;
 
-    // Posición aleatoria en el espacio-mundo (disgregadas inicialmente)
-    // Las pintitas se agrupan por flocking, no por zona predefinida
-    const ws = getWorldSize();
-    this.x = (Math.random() - 0.5) * ws.w * 0.85;
-    this.y = (Math.random() - 0.5) * ws.h * 0.85;
-    this.vx = (Math.random() - 0.5) * 0.3;
-    this.vy = (Math.random() - 0.5) * 0.3;
+    // Spawn circular dentro del mundo, sin marco rectangular
+    const maxR = getWorldRadius();
+    const angulo = Math.random() * Math.PI * 2;
+    const radio = Math.sqrt(Math.random()) * maxR * 0.75;
+    this.x = Math.cos(angulo) * radio;
+    this.y = Math.sin(angulo) * radio;
 
-    // Las nuevas pintitas vienen desde el borde del mundo
+    // Velocidad inicial pequeña para arranque orgánico
+    this.vx = (Math.random() - 0.5) * 0.5;
+    this.vy = (Math.random() - 0.5) * 0.5;
+
+    // Las nuevas pintitas (incoming) vienen desde fuera del mundo
     if (esNueva) {
-      const angulo = Math.random() * Math.PI * 2;
-      const radioSpawn = Math.max(ws.w, ws.h) * 0.6;
-      this.x = Math.cos(angulo) * radioSpawn;
-      this.y = Math.sin(angulo) * radioSpawn;
+      const a = Math.random() * Math.PI * 2;
+      const r = maxR * 1.1;
+      this.x = Math.cos(a) * r;
+      this.y = Math.sin(a) * r;
     }
 
     this.opacidadFiltro = 1;
     this.opacidadFiltroObjetivo = filtrosActivos[cat] ? 1 : 0;
 
-    // Respiración propia
     this.fase = Math.random() * Math.PI * 2;
     this.velFase = 0.0005 + Math.random() * 0.001;
 
@@ -298,7 +303,7 @@ class Pintita {
 
     let ax = 0, ay = 0;
 
-    // FLOCKING: atracción al mismo color + repulsión cercana + repulsión inter-color
+    // FLOCKING: atracción al mismo color (alcance corto) + repulsión cercana + repulsión inter-color
     for (const o of vecinos) {
       if (o === this) continue;
       const dx = o.x - this.x;
@@ -308,7 +313,7 @@ class Pintita {
       const dist = Math.sqrt(dist2);
 
       if (o.categoria === this.categoria) {
-        // Atracción suave al mismo color
+        // Atracción suave de alcance corto: forma cúmulos locales, no globales
         if (dist < ATRACCION_DIST && dist > REPULSION_CERCANA_DIST) {
           ax += (dx / dist) * ATRACCION_FUERZA;
           ay += (dy / dist) * ATRACCION_FUERZA;
@@ -320,7 +325,7 @@ class Pintita {
           ay -= (dy / dist) * f;
         }
       } else {
-        // Repulsión sutil entre colores distintos
+        // Repulsión inter-color: mantiene separación entre clusters de distinto color
         if (dist < REPULSION_INTER_DIST) {
           const f = REPULSION_INTER_FUERZA * (REPULSION_INTER_DIST - dist) / REPULSION_INTER_DIST;
           ax -= (dx / dist) * f;
@@ -329,7 +334,7 @@ class Pintita {
       }
     }
 
-    // Agitación por velocidad del cursor (solo cuando no se está paneando)
+    // Agitación por velocidad del cursor (solo cuando NO se está paneando)
     if (!isDragging && hwx !== null && mouseVel > 180) {
       const dx = this.x - hwx;
       const dy = this.y - hwy;
@@ -346,20 +351,36 @@ class Pintita {
       }
     }
 
-    // Atracción débil al centro del mundo (mantiene la galaxia centrada)
-    ax += -this.x * 0.00002;
-    ay += -this.y * 0.00002;
+    // Frontera circular suave: pull invisible solo si la pintita se aleja demasiado
+    // No hay paredes duras, no se ve un marco
+    const distCentro = Math.sqrt(this.x * this.x + this.y * this.y);
+    const maxR = getWorldRadius();
+    if (distCentro > maxR * 0.85 && distCentro > 0.1) {
+      const exceso = distCentro - maxR * 0.85;
+      const pull = exceso * 0.0008;
+      ax -= (this.x / distCentro) * pull;
+      ay -= (this.y / distCentro) * pull;
+    }
 
-    // Pequeño ruido browniano para vida orgánica
-    ax += (Math.random() - 0.5) * 0.01;
-    ay += (Math.random() - 0.5) * 0.01;
+    // Ruido browniano constante: mantiene viaje, evita asentamiento global
+    ax += (Math.random() - 0.5) * 0.018;
+    ay += (Math.random() - 0.5) * 0.018;
 
-    // Integrar velocidad
-    this.vx = (this.vx + ax) * 0.98;
-    this.vy = (this.vy + ay) * 0.98;
+    // Cap de aceleración: previene runaway forces si hay muchos vecinos atrayendo
+    const accMax = 0.08;
+    const a2 = ax * ax + ay * ay;
+    if (a2 > accMax * accMax) {
+      const a = Math.sqrt(a2);
+      ax = (ax / a) * accMax;
+      ay = (ay / a) * accMax;
+    }
 
-    // Limitar velocidad máxima
-    const velMax = 1.5;
+    // Damping moderado: conserva movimiento perpetuo
+    this.vx = (this.vx + ax) * 0.975;
+    this.vy = (this.vy + ay) * 0.975;
+
+    // Velocidad máxima
+    const velMax = 1.6;
     const v2 = this.vx * this.vx + this.vy * this.vy;
     if (v2 > velMax * velMax) {
       const v = Math.sqrt(v2);
@@ -367,20 +388,9 @@ class Pintita {
       this.vy = (this.vy / v) * velMax;
     }
 
-    // Mover
     this.x += this.vx;
     this.y += this.vy;
 
-    // Mantener dentro del mundo (boundary suave)
-    const ws = getWorldSize();
-    const limX = ws.w / 2;
-    const limY = ws.h / 2;
-    if (this.x < -limX) { this.x = -limX; this.vx = Math.abs(this.vx) * 0.5; }
-    if (this.x >  limX) { this.x =  limX; this.vx = -Math.abs(this.vx) * 0.5; }
-    if (this.y < -limY) { this.y = -limY; this.vy = Math.abs(this.vy) * 0.5; }
-    if (this.y >  limY) { this.y =  limY; this.vy = -Math.abs(this.vy) * 0.5; }
-
-    // Suavizar filtro de visibilidad
     this.opacidadFiltro += (this.opacidadFiltroObjetivo - this.opacidadFiltro) * 0.05;
   }
 
@@ -411,7 +421,7 @@ class Pintita {
   contieneEnMundo(wx, wy) {
     const dx = wx - this.x;
     const dy = wy - this.y;
-    const r = RADIO_BASE * 0.55;
+    const r = RADIO_BASE * 0.5;
     return dx * dx + dy * dy < r * r;
   }
 }
