@@ -250,11 +250,11 @@ const DURACION_AGITACION = 2800;
 // Flocking calibrado para clusters múltiples estables sin colapso global
 // Inspirado en el display.html original pero en unidades-mundo
 const ATRACCION_DIST = 215;          // alcance corto → no agrupa todo en uno solo
-const ATRACCION_FUERZA = 0.0009;     // suave
+const ATRACCION_FUERZA = 0.0016;     // suficiente para reconvergencia ágil
 const REPULSION_CERCANA_DIST = 28;
 const REPULSION_CERCANA_FUERZA = 0.052;
 const REPULSION_INTER_DIST = 58;
-const REPULSION_INTER_FUERZA = 0.0042; // fuerte para mantener clusters separados
+const REPULSION_INTER_FUERZA = 0.0048; // fuerte: mantiene clusters separados
 
 class Pintita {
   constructor(id, respId, cat, esNueva = false) {
@@ -349,7 +349,7 @@ class Pintita {
         const dist = Math.sqrt(dist2);
         const fd = (rInfl - dist) / rInfl;
         const ve = Math.min(2.8, (mouseVel - 180) / 350);
-        const f = fd * ve * 0.65;
+        const f = fd * ve * 0.38;  // empuje moderado: pintitas se apartan pero vuelven rápido
         ax += (dx / dist) * f;
         ay += (dy / dist) * f;
         if (f > 0.04) this.tiempoAgitacion = DURACION_AGITACION;
@@ -372,9 +372,25 @@ class Pintita {
     ax += -this.x * 0.000004;
     ay += -this.y * 0.000004;
 
-    // Ruido browniano constante: mantiene viaje, evita asentamiento global
-    ax += (Math.random() - 0.5) * 0.018;
-    ay += (Math.random() - 0.5) * 0.018;
+    // CAMPO DE VIENTO COHERENTE — transhumancia
+    // Fuerzas suaves que varían según posición espacial y tiempo
+    // Pintitas cercanas sienten viento similar (migran juntas como cluster)
+    // Pintitas distantes sienten viento distinto (migración diferenciada)
+    // Dos frecuencias: una lenta de gran escala + una más rápida de detalle
+    const wsLento = 0.0026, wtLento = 0.00013;
+    const wsRapid = 0.0078, wtRapid = 0.00032;
+    const windX =
+      Math.sin(this.x * wsLento + tiempoGlobal * wtLento) * 0.70 +
+      Math.sin(this.x * wsRapid + this.y * 0.005 + tiempoGlobal * wtRapid + 1.3) * 0.30;
+    const windY =
+      Math.cos(this.y * wsLento + tiempoGlobal * wtLento * 1.13) * 0.70 +
+      Math.cos(this.y * wsRapid + this.x * 0.005 + tiempoGlobal * wtRapid * 1.21 + 0.7) * 0.30;
+    ax += windX * 0.006;
+    ay += windY * 0.006;
+
+    // Ruido browniano leve para textura orgánica (menor que antes: la migración la da el viento)
+    ax += (Math.random() - 0.5) * 0.012;
+    ay += (Math.random() - 0.5) * 0.012;
 
     // Cap de aceleración: previene runaway forces si hay muchos vecinos atrayendo
     const accMax = 0.08;
