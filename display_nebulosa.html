@@ -212,49 +212,81 @@ function hexToRgb(hex) {
   };
 }
 
-function crearGradiente(rgb) {
+// Gradiente MASA: blob grande de bordes suaves pero núcleo firme
+// Como gotas de aceite. Cuando muchas se superponen del mismo color forman zonas continuas
+function crearGradienteMasa(rgb) {
   const tam = 256;
   const off = document.createElement('canvas');
   off.width = tam;
   off.height = tam;
   const c = off.getContext('2d');
   const grd = c.createRadialGradient(tam/2, tam/2, 0, tam/2, tam/2, tam/2);
-  // Curva acuarela: núcleo extendido con color firme, desvanecimiento gradual
-  // Los saltos entre stops crecen y luego decrecen suavemente → sin anillos
+  // Meseta amplia con caída relativamente brusca al borde: efecto "gota"
   grd.addColorStop(0,    `rgba(${rgb.r},${rgb.g},${rgb.b},1.000)`);
-  grd.addColorStop(0.12, `rgba(${rgb.r},${rgb.g},${rgb.b},0.980)`);
-  grd.addColorStop(0.25, `rgba(${rgb.r},${rgb.g},${rgb.b},0.910)`);
-  grd.addColorStop(0.40, `rgba(${rgb.r},${rgb.g},${rgb.b},0.740)`);
-  grd.addColorStop(0.55, `rgba(${rgb.r},${rgb.g},${rgb.b},0.500)`);
-  grd.addColorStop(0.70, `rgba(${rgb.r},${rgb.g},${rgb.b},0.250)`);
-  grd.addColorStop(0.83, `rgba(${rgb.r},${rgb.g},${rgb.b},0.080)`);
-  grd.addColorStop(0.93, `rgba(${rgb.r},${rgb.g},${rgb.b},0.015)`);
+  grd.addColorStop(0.35, `rgba(${rgb.r},${rgb.g},${rgb.b},0.940)`);
+  grd.addColorStop(0.55, `rgba(${rgb.r},${rgb.g},${rgb.b},0.810)`);
+  grd.addColorStop(0.70, `rgba(${rgb.r},${rgb.g},${rgb.b},0.580)`);
+  grd.addColorStop(0.82, `rgba(${rgb.r},${rgb.g},${rgb.b},0.290)`);
+  grd.addColorStop(0.91, `rgba(${rgb.r},${rgb.g},${rgb.b},0.090)`);
+  grd.addColorStop(0.97, `rgba(${rgb.r},${rgb.g},${rgb.b},0.012)`);
   grd.addColorStop(1,    `rgba(${rgb.r},${rgb.g},${rgb.b},0)`);
   c.fillStyle = grd;
   c.fillRect(0, 0, tam, tam);
   return off;
 }
 
-const gradientCache = {};
+// Gradiente CHISPA: dot pequeño y definido, solo visible cuando la pintita es agitada o recién llegada
+function crearGradienteChispa(rgb) {
+  const tam = 128;
+  const off = document.createElement('canvas');
+  off.width = tam;
+  off.height = tam;
+  const c = off.getContext('2d');
+  const grd = c.createRadialGradient(tam/2, tam/2, 0, tam/2, tam/2, tam/2);
+  grd.addColorStop(0,    `rgba(${rgb.r},${rgb.g},${rgb.b},1.000)`);
+  grd.addColorStop(0.25, `rgba(${rgb.r},${rgb.g},${rgb.b},0.880)`);
+  grd.addColorStop(0.45, `rgba(${rgb.r},${rgb.g},${rgb.b},0.610)`);
+  grd.addColorStop(0.65, `rgba(${rgb.r},${rgb.g},${rgb.b},0.290)`);
+  grd.addColorStop(0.82, `rgba(${rgb.r},${rgb.g},${rgb.b},0.075)`);
+  grd.addColorStop(0.93, `rgba(${rgb.r},${rgb.g},${rgb.b},0.010)`);
+  grd.addColorStop(1,    `rgba(${rgb.r},${rgb.g},${rgb.b},0)`);
+  c.fillStyle = grd;
+  c.fillRect(0, 0, tam, tam);
+  return off;
+}
+
+const gradMasa = {};
+const gradChispa = {};
 for (const [cat, info] of Object.entries(CATEGORIAS)) {
-  gradientCache[cat] = crearGradiente(hexToRgb(info.color));
+  const rgb = hexToRgb(info.color);
+  gradMasa[cat] = crearGradienteMasa(rgb);
+  gradChispa[cat] = crearGradienteChispa(rgb);
 }
 
 // ============================================================
 // PINTITA — partícula con flocking en espacio-mundo
+// Cada pintita aporta dos cosas a la escena:
+//   1) MASA: una gota grande y suave que, sumada con sus vecinas del mismo color,
+//      forma una zona continua sin forma definida (efecto aceite sobre agua)
+//   2) CHISPA: un punto sharp pequeño, solo visible cuando la pintita es
+//      agitada por el mouse o recién se integra al corpus (esNueva)
+// En estado de reposo: zonas de color amorfas sin puntos visibles.
+// En interacción o llegada: aparecen los nodos individuales y luego se funden.
 // ============================================================
-const RADIO_BASE = 48;
-const OPACIDAD_BASE = 0.062;
+const RADIO_MASA = 110;
+const OPACIDAD_MASA = 0.030;
+const RADIO_CHISPA = 22;
+const OPACIDAD_CHISPA = 0.45;
 const DURACION_AGITACION = 2800;
+const DURACION_INTEGRACION = 9000; // tiempo en que una pintita nueva aparece como chispa antes de fundirse
 
 // Flocking calibrado para clusters múltiples estables sin colapso global
-// Inspirado en el display.html original pero en unidades-mundo
-const ATRACCION_DIST = 215;          // alcance corto → no agrupa todo en uno solo
-const ATRACCION_FUERZA = 0.0016;     // suficiente para reconvergencia ágil
+const ATRACCION_DIST = 215;
+const ATRACCION_FUERZA = 0.0016;
 const REPULSION_CERCANA_DIST = 28;
 const REPULSION_CERCANA_FUERZA = 0.052;
-const REPULSION_INTER_DIST = 58;
-const REPULSION_INTER_FUERZA = 0.0048; // fuerte: mantiene clusters separados
+const REPULSION_INTER_DIST = 75;        // más amplio: zonas de color mejor diferenciadas
+const REPULSION_INTER_FUERZA = 0.0044;
 
 class Pintita {
   constructor(id, respId, cat, esNueva = false) {
@@ -453,37 +485,54 @@ class Pintita {
   dibujar(ctx, resp) {
     if (this.opacidadFiltro < 0.005) return;
 
-    // Tamaño individual: la mayoría medianas, algunas notablemente más grandes
-    const radioInd = RADIO_BASE * this.tamFactor;
+    // Tamaños individuales por capa
+    const radioMasaInd = RADIO_MASA * this.tamFactor;
 
-    // Frustum culling en pantalla
+    // Frustum culling usando el radio mayor (la masa)
     const sx = (this.x - cam.x) * cam.scale + W / 2;
     const sy = (this.y - cam.y) * cam.scale + H / 2;
-    const sr = (radioInd + 10) * cam.scale;
+    const sr = (radioMasaInd + 10) * cam.scale;
     if (sx + sr < 0 || sx - sr > W) return;
     if (sy + sr < 0 || sy - sr > H) return;
 
-    // Respiración propia y global, proporcional al tamaño
+    // Respiración (proporcional al tamaño individual)
     const escalaResp = Math.sqrt(this.tamFactor);
-    const respProp = Math.sin(this.fase) * 2.4 * escalaResp;
-    const respGlob = resp * 3.2 * escalaResp;
-    const radio = Math.max(2, radioInd + respProp + respGlob);
+    const respProp = Math.sin(this.fase) * 5.5 * escalaResp;
+    const respGlob = resp * 7 * escalaResp;
 
-    const pOpac = 1 + resp * 0.08;
     const fade = Math.min(1, this.edad / 4500);
-    const op = OPACIDAD_BASE * fade * pOpac * this.opacidadFiltro * this.opacFactor;
+    const pOpac = 1 + resp * 0.08;
 
-    // drawImage del gradiente acuarela pre-renderizado
-    ctx.globalAlpha = op;
-    const img = gradientCache[this.categoria];
-    if (img) ctx.drawImage(img, this.x - radio, this.y - radio, radio * 2, radio * 2);
+    // ─── CAPA 1: MASA (siempre visible) ───────────────────────
+    // Gota grande de color suave. Sumada con vecinas forma zonas amorfas continuas
+    const radioMasa = Math.max(3, radioMasaInd + respProp + respGlob);
+    const opMasa = OPACIDAD_MASA * fade * pOpac * this.opacidadFiltro * this.opacFactor;
+    ctx.globalAlpha = opMasa;
+    const imgMasa = gradMasa[this.categoria];
+    if (imgMasa) ctx.drawImage(imgMasa, this.x - radioMasa, this.y - radioMasa, radioMasa * 2, radioMasa * 2);
+
+    // ─── CAPA 2: CHISPA (solo agitación o integración reciente) ───
+    // Aparece cuando se agita la masa (mouse cerca) o cuando una pintita nueva está integrándose
+    // Se funde de vuelta a la masa al cabo de unos segundos
+    const fAgit = this.tiempoAgitacion / DURACION_AGITACION;
+    const fEdad = Math.max(0, 1 - this.edad / DURACION_INTEGRACION);
+    const chispa = Math.max(fAgit, fEdad * 0.85);
+    if (chispa > 0.03) {
+      const radioChispa = (RADIO_CHISPA * this.tamFactor + respProp * 0.3);
+      const opChispa = OPACIDAD_CHISPA * chispa * this.opacidadFiltro;
+      ctx.globalAlpha = opChispa;
+      const imgChispa = gradChispa[this.categoria];
+      if (imgChispa) ctx.drawImage(imgChispa, this.x - radioChispa, this.y - radioChispa, radioChispa * 2, radioChispa * 2);
+    }
+
     ctx.globalAlpha = 1;
   }
 
   contieneEnMundo(wx, wy) {
     const dx = wx - this.x;
     const dy = wy - this.y;
-    const r = RADIO_BASE * this.tamFactor * 0.5;
+    // Hit-test sobre la masa, no la chispa (lo que el usuario "toca" es la zona)
+    const r = RADIO_MASA * this.tamFactor * 0.4;
     return dx * dx + dy * dy < r * r;
   }
 }
