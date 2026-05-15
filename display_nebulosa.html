@@ -105,7 +105,7 @@
   </div>
 </div>
 
-<div class="zoom-hint">agita el cursor para revelar relatos · pellizca / rueda para navegar</div>
+<div class="zoom-hint">agita el cursor para revelar relatos · pellizca / rueda para zoom · arrastra para mover</div>
 
 <div id="modal" role="dialog" aria-modal="true">
   <div class="modal-contenido">
@@ -137,20 +137,6 @@ const CATEGORIAS = {
 const filtrosActivos = {};
 for (const cat of Object.keys(CATEGORIAS)) filtrosActivos[cat] = true;
 
-// Posiciones base de cada isla en espacio-mundo (para worldFactor=1)
-// Distribuidas para ocupar toda la pantalla como archipiélago orgánico
-const POSICIONES_BASE = {
-  'dolor_fisico':              { x: -680, y: -420 },
-  'frio_metal':                { x:   40, y: -580 },
-  'materiales_agradables':     { x:  720, y: -340 },
-  'miedo_ansiedad':            { x: -780, y:   40 },
-  'sensaciones_agradables':    { x:  700, y:  330 },
-  'normalizacion':             { x:   60, y:  560 },
-  'vivencia_sexual_traumatica':{ x: -520, y:  580 },
-  'profesional_masculino':     { x:  560, y:   50 },
-  'profesional_femenino':      { x:  300, y: -130 },
-};
-
 // ============================================================
 // CANVAS Y DIMENSIONES
 // ============================================================
@@ -173,15 +159,29 @@ ajustarCanvas();
 window.addEventListener('resize', ajustarCanvas);
 
 // ============================================================
-// CÁMARA (espacio-mundo navegable)
+// FACTOR DE MUNDO
+// Crece con el número de relatos para acomodar más voces
+// ============================================================
+let totalRelatos = 64;
+function getWorldFactor() {
+  return Math.sqrt(Math.max(64, totalRelatos) / 64);
+}
+function getWorldSize() {
+  const wf = getWorldFactor();
+  return { w: 2400 * wf, h: 1500 * wf };
+}
+
+// ============================================================
+// CÁMARA (zoom + pan en espacio-mundo)
+// El zoom es puramente visual: nunca altera las posiciones de las pintitas
 // ============================================================
 const cam = {
-  x: 0, y: 0,         // posición actual (suavizada)
-  scale: 0.5,          // zoom actual (suavizado)
-  tx: 0, ty: 0,        // objetivo de posición
-  tscale: 0.5,         // objetivo de zoom
+  x: 0, y: 0,
+  scale: 0.5,
+  tx: 0, ty: 0,
+  tscale: 0.5,
   MIN_SCALE: 0.05,
-  MAX_SCALE: 6,
+  MAX_SCALE: 4,
 };
 
 function screenToWorld(sx, sy) {
@@ -191,94 +191,18 @@ function screenToWorld(sx, sy) {
   };
 }
 
-function ajustarCamaraGalaxia() {
-  const wf = getWorldFactor();
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  Object.values(POSICIONES_BASE).forEach(p => {
-    const x = p.x * wf, y = p.y * wf;
-    if (x < minX) minX = x; if (x > maxX) maxX = x;
-    if (y < minY) minY = y; if (y > maxY) maxY = y;
-  });
-  const pad = 220 * wf;
-  const worldW = (maxX - minX) + pad * 2;
-  const worldH = (maxY - minY) + pad * 2;
-  const scale = Math.min(W / worldW, H / worldH) * 0.88;
-  cam.tx = (minX + maxX) / 2;
-  cam.ty = (minY + maxY) / 2;
+function ajustarCamaraInicial() {
+  const ws = getWorldSize();
+  const scale = Math.min(W / ws.w, H / ws.h) * 0.95;
+  cam.tx = 0; cam.ty = 0;
   cam.tscale = Math.max(cam.MIN_SCALE, Math.min(0.9, scale));
   cam.x = cam.tx; cam.y = cam.ty; cam.scale = cam.tscale;
 }
 
 // ============================================================
-// FACTOR DE MUNDO (crece con el corpus)
-// ============================================================
-let totalRelatos = 64;
-function getWorldFactor() {
-  return Math.sqrt(Math.max(64, totalRelatos) / 64);
-}
-
-// ============================================================
-// ZONAS (islas orgánicas que se mueven como medusas)
-// ============================================================
-let ZONAS = {};
-
-function actualizarZonas(tiempo) {
-  const wf = getWorldFactor();
-  const cats = Object.keys(CATEGORIAS);
-
-  // Redistribuir si hay filtros activos
-  const activas = cats.filter(c => filtrosActivos[c]);
-  const nActivas = activas.length || 1;
-
-  cats.forEach((cat, i) => {
-    const posBase = POSICIONES_BASE[cat] || { x: 0, y: 0 };
-    // Deriva orgánica independiente por isla (como medusas)
-    const amp = 55 * wf;
-    const velX = 0.000038 + i * 0.000007;
-    const velY = 0.000031 + i * 0.000009;
-    const phX = i * 2.31;
-    const phY = i * 1.73;
-
-    let baseX = posBase.x * wf;
-    let baseY = posBase.y * wf;
-
-    // Si está filtrada, reposicionar en círculo con las activas
-    if (filtrosActivos[cat]) {
-      const idxActivo = activas.indexOf(cat);
-      const angulo = (idxActivo / nActivas) * Math.PI * 2 - Math.PI / 2;
-      const r = Math.min(W, H) * 0.32 / cam.scale;
-      baseX = Math.cos(angulo) * r;
-      baseY = Math.sin(angulo) * r;
-    }
-
-    ZONAS[cat] = {
-      x: baseX + Math.sin(tiempo * velX + phX) * amp,
-      y: baseY + Math.cos(tiempo * velY + phY) * amp,
-    };
-  });
-}
-
-// ============================================================
-// CENTROIDES POR CATEGORÍA
-// ============================================================
-function calcularCentroides() {
-  const c = {};
-  for (const cat of Object.keys(CATEGORIAS)) {
-    c[cat] = { sx: 0, sy: 0, count: 0, x: 0, y: 0 };
-  }
-  for (const p of pintitas) {
-    const g = c[p.categoria];
-    if (g) { g.sx += p.x; g.sy += p.y; g.count++; }
-  }
-  for (const cat of Object.keys(c)) {
-    const g = c[cat];
-    if (g.count > 0) { g.x = g.sx / g.count; g.y = g.sy / g.count; }
-  }
-  return c;
-}
-
-// ============================================================
-// PINTITA — partícula nebulosa en espacio-mundo
+// GRADIENTES PRE-RENDERIZADOS (clave para rendimiento)
+// Cada categoría tiene su gradiente raised cosine cacheado como imagen
+// drawImage es mucho más rápido que createRadialGradient por frame
 // ============================================================
 function hexToRgb(hex) {
   return {
@@ -288,40 +212,76 @@ function hexToRgb(hex) {
   };
 }
 
-const RADIO_BASE = 72;
-const OPACIDAD_BASE = 0.052;
+function crearGradiente(rgb) {
+  const tam = 256;
+  const off = document.createElement('canvas');
+  off.width = tam;
+  off.height = tam;
+  const c = off.getContext('2d');
+  const grd = c.createRadialGradient(tam/2, tam/2, 0, tam/2, tam/2, tam/2);
+  // Raised cosine: derivada cero en los extremos → sin anillos visibles
+  grd.addColorStop(0,    `rgba(${rgb.r},${rgb.g},${rgb.b},1.000)`);
+  grd.addColorStop(0.1,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.976)`);
+  grd.addColorStop(0.2,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.905)`);
+  grd.addColorStop(0.3,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.794)`);
+  grd.addColorStop(0.4,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.655)`);
+  grd.addColorStop(0.5,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.500)`);
+  grd.addColorStop(0.6,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.345)`);
+  grd.addColorStop(0.7,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.206)`);
+  grd.addColorStop(0.8,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.095)`);
+  grd.addColorStop(0.9,  `rgba(${rgb.r},${rgb.g},${rgb.b},0.024)`);
+  grd.addColorStop(1,    `rgba(${rgb.r},${rgb.g},${rgb.b},0)`);
+  c.fillStyle = grd;
+  c.fillRect(0, 0, tam, tam);
+  return off;
+}
+
+const gradientCache = {};
+for (const [cat, info] of Object.entries(CATEGORIAS)) {
+  gradientCache[cat] = crearGradiente(hexToRgb(info.color));
+}
+
+// ============================================================
+// PINTITA — partícula con flocking en espacio-mundo
+// ============================================================
+const RADIO_BASE = 70;
+const OPACIDAD_BASE = 0.058;
 const DURACION_AGITACION = 2800;
+
+// Rangos de flocking en unidades-mundo
+const ATRACCION_DIST = 320;
+const REPULSION_CERCANA_DIST = 32;
+const REPULSION_INTER_DIST = 50;
+const ATRACCION_FUERZA = 0.0015;
+const REPULSION_CERCANA_FUERZA = 0.055;
+const REPULSION_INTER_FUERZA = 0.0009;
 
 class Pintita {
   constructor(id, respId, cat, esNueva = false) {
     this.id = id;
     this.respuestaId = respId;
     this.categoria = cat;
-    this.color = CATEGORIAS[cat]?.color || '#888';
-    this.rgb = hexToRgb(this.color);
 
-    this.semillaAng = Math.random() * Math.PI * 2;
-    this.semillaRad = Math.sqrt(Math.random());
+    // Posición aleatoria en el espacio-mundo (disgregadas inicialmente)
+    // Las pintitas se agrupan por flocking, no por zona predefinida
+    const ws = getWorldSize();
+    this.x = (Math.random() - 0.5) * ws.w * 0.85;
+    this.y = (Math.random() - 0.5) * ws.h * 0.85;
+    this.vx = (Math.random() - 0.5) * 0.3;
+    this.vy = (Math.random() - 0.5) * 0.3;
 
-    this.bx = 0; this.by = 0;
-    this.recalcularBase();
-    this.x = this.bx; this.y = this.by;
-
-    this.ox = 0; this.oy = 0;
-    this.ovx = 0; this.ovy = 0;
-
+    // Las nuevas pintitas vienen desde el borde del mundo
     if (esNueva) {
-      // Aparece en posición aleatoria del espacio-mundo visible y viaja a su isla
-      const wf = getWorldFactor();
-      const rx = (Math.random() - 0.5) * W / cam.scale * 0.9 + cam.x;
-      const ry = (Math.random() - 0.5) * H / cam.scale * 0.9 + cam.y;
-      this.ox = rx - this.bx;
-      this.oy = ry - this.by;
+      const angulo = Math.random() * Math.PI * 2;
+      const radioSpawn = Math.max(ws.w, ws.h) * 0.6;
+      this.x = Math.cos(angulo) * radioSpawn;
+      this.y = Math.sin(angulo) * radioSpawn;
     }
 
     this.opacidadFiltro = 1;
     this.opacidadFiltroObjetivo = filtrosActivos[cat] ? 1 : 0;
 
+    // Respiración propia
     this.fase = Math.random() * Math.PI * 2;
     this.velFase = 0.0005 + Math.random() * 0.001;
 
@@ -329,122 +289,163 @@ class Pintita {
     this.edad = 0;
   }
 
-  recalcularBase() {
-    const zona = ZONAS[this.categoria];
-    if (!zona) { this.bx = 0; this.by = 0; return; }
-    const wf = getWorldFactor();
-    // Dispersión escala con el mundo para que las islas mantengan tamaño relativo
-    const disp = 180 * wf;
-    const r = this.semillaRad * disp;
-    this.bx = zona.x + Math.cos(this.semillaAng) * r;
-    this.by = zona.y + Math.sin(this.semillaAng) * r;
-  }
-
-  actualizar(dt, hwx, hwy, mouseVel, centroides) {
+  actualizar(dt, hwx, hwy, mouseVel, vecinos, isDragging) {
     this.edad += dt;
     this.fase += this.velFase * dt;
 
     if (this.tiempoAgitacion > 0)
       this.tiempoAgitacion = Math.max(0, this.tiempoAgitacion - dt);
 
-    // Agitación por velocidad del mouse (en mundo)
-    const UMBRAL = 180;
-    if (hwx !== null && mouseVel > UMBRAL) {
-      const dx = (this.bx + this.ox) - hwx;
-      const dy = (this.by + this.oy) - hwy;
+    let ax = 0, ay = 0;
+
+    // FLOCKING: atracción al mismo color + repulsión cercana + repulsión inter-color
+    for (const o of vecinos) {
+      if (o === this) continue;
+      const dx = o.x - this.x;
+      const dy = o.y - this.y;
       const dist2 = dx * dx + dy * dy;
-      const rInfl = 190 / cam.scale; // influencia en mundo
-      if (dist2 < rInfl * rInfl && dist2 > 0.1) {
+      if (dist2 < 0.1) continue;
+      const dist = Math.sqrt(dist2);
+
+      if (o.categoria === this.categoria) {
+        // Atracción suave al mismo color
+        if (dist < ATRACCION_DIST && dist > REPULSION_CERCANA_DIST) {
+          ax += (dx / dist) * ATRACCION_FUERZA;
+          ay += (dy / dist) * ATRACCION_FUERZA;
+        }
+        // Repulsión cuando muy cerca (evita apilamiento)
+        if (dist < REPULSION_CERCANA_DIST) {
+          const f = REPULSION_CERCANA_FUERZA * (REPULSION_CERCANA_DIST - dist) / REPULSION_CERCANA_DIST;
+          ax -= (dx / dist) * f;
+          ay -= (dy / dist) * f;
+        }
+      } else {
+        // Repulsión sutil entre colores distintos
+        if (dist < REPULSION_INTER_DIST) {
+          const f = REPULSION_INTER_FUERZA * (REPULSION_INTER_DIST - dist) / REPULSION_INTER_DIST;
+          ax -= (dx / dist) * f;
+          ay -= (dy / dist) * f;
+        }
+      }
+    }
+
+    // Agitación por velocidad del cursor (solo cuando no se está paneando)
+    if (!isDragging && hwx !== null && mouseVel > 180) {
+      const dx = this.x - hwx;
+      const dy = this.y - hwy;
+      const dist2 = dx * dx + dy * dy;
+      const rInfl = 200 / Math.max(0.1, cam.scale);
+      if (dist2 < rInfl * rInfl && dist2 > 1) {
         const dist = Math.sqrt(dist2);
         const fd = (rInfl - dist) / rInfl;
-        const ve = Math.min(2.8, (mouseVel - UMBRAL) / 350);
-        const f = fd * ve * 0.7;
-        this.ovx += (dx / dist) * f;
-        this.ovy += (dy / dist) * f;
+        const ve = Math.min(2.8, (mouseVel - 180) / 350);
+        const f = fd * ve * 0.65;
+        ax += (dx / dist) * f;
+        ay += (dy / dist) * f;
         if (f > 0.04) this.tiempoAgitacion = DURACION_AGITACION;
       }
     }
 
-    const fa = this.tiempoAgitacion / DURACION_AGITACION;
+    // Atracción débil al centro del mundo (mantiene la galaxia centrada)
+    ax += -this.x * 0.00002;
+    ay += -this.y * 0.00002;
 
-    // Atracción al centroide desactivada durante scatter
-    if (centroides && fa < 0.1) {
-      const c = centroides[this.categoria];
-      if (c && c.count > 1) {
-        const dx = c.x - this.x;
-        const dy = c.y - this.y;
-        const f = 0.00015;
-        this.ovx += dx * f;
-        this.ovy += dy * f;
-      }
+    // Pequeño ruido browniano para vida orgánica
+    ax += (Math.random() - 0.5) * 0.01;
+    ay += (Math.random() - 0.5) * 0.01;
+
+    // Integrar velocidad
+    this.vx = (this.vx + ax) * 0.98;
+    this.vy = (this.vy + ay) * 0.98;
+
+    // Limitar velocidad máxima
+    const velMax = 1.5;
+    const v2 = this.vx * this.vx + this.vy * this.vy;
+    if (v2 > velMax * velMax) {
+      const v = Math.sqrt(v2);
+      this.vx = (this.vx / v) * velMax;
+      this.vy = (this.vy / v) * velMax;
     }
 
-    // Resorte: muy débil en scatter
-    const k = 0.0055 * (1 - fa * 0.95);
-    this.ovx -= this.ox * k;
-    this.ovy -= this.oy * k;
+    // Mover
+    this.x += this.vx;
+    this.y += this.vy;
 
-    // Damping: más alto en scatter para mantener separación
-    const damp = 0.955 + fa * 0.018;
-    this.ovx *= damp;
-    this.ovy *= damp;
+    // Mantener dentro del mundo (boundary suave)
+    const ws = getWorldSize();
+    const limX = ws.w / 2;
+    const limY = ws.h / 2;
+    if (this.x < -limX) { this.x = -limX; this.vx = Math.abs(this.vx) * 0.5; }
+    if (this.x >  limX) { this.x =  limX; this.vx = -Math.abs(this.vx) * 0.5; }
+    if (this.y < -limY) { this.y = -limY; this.vy = Math.abs(this.vy) * 0.5; }
+    if (this.y >  limY) { this.y =  limY; this.vy = -Math.abs(this.vy) * 0.5; }
 
-    // Ruido browniano fluido
-    this.ovx += (Math.random() - 0.5) * 0.025;
-    this.ovy += (Math.random() - 0.5) * 0.025;
-
-    this.ox += this.ovx;
-    this.oy += this.ovy;
-
+    // Suavizar filtro de visibilidad
     this.opacidadFiltro += (this.opacidadFiltroObjetivo - this.opacidadFiltro) * 0.05;
-
-    this.x = this.bx + this.ox;
-    this.y = this.by + this.oy;
   }
 
   dibujar(ctx, resp) {
     if (this.opacidadFiltro < 0.005) return;
 
-    // Frustum culling en espacio-pantalla
+    // Frustum culling en pantalla
     const sx = (this.x - cam.x) * cam.scale + W / 2;
     const sy = (this.y - cam.y) * cam.scale + H / 2;
-    const sr = RADIO_BASE * cam.scale + 5;
-    if (sx + sr < 0 || sx - sr > W || sy + sr < 0 || sy - sr > H) return;
+    const sr = (RADIO_BASE + 8) * cam.scale;
+    if (sx + sr < 0 || sx - sr > W) return;
+    if (sy + sr < 0 || sy - sr > H) return;
 
-    const respProp = Math.sin(this.fase) * 2.5;
-    const respGlob = resp * 3.5;
-    const radio = Math.max(1.5, RADIO_BASE + respProp + respGlob);
+    const respProp = Math.sin(this.fase) * 2.2;
+    const respGlob = resp * 3;
+    const radio = Math.max(2, RADIO_BASE + respProp + respGlob);
     const pOpac = 1 + resp * 0.08;
-    const fade = Math.min(1, this.edad / 5000);
+    const fade = Math.min(1, this.edad / 4500);
     const op = OPACIDAD_BASE * fade * pOpac * this.opacidadFiltro;
 
-    // Gradiente raised cosine: derivada cero en los extremos → sin anillos visibles
-    const { r, g, b } = this.rgb;
-    const grd = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, radio);
-    grd.addColorStop(0,    `rgba(${r},${g},${b},${op * 1.000})`);
-    grd.addColorStop(0.1,  `rgba(${r},${g},${b},${op * 0.976})`);
-    grd.addColorStop(0.2,  `rgba(${r},${g},${b},${op * 0.905})`);
-    grd.addColorStop(0.3,  `rgba(${r},${g},${b},${op * 0.794})`);
-    grd.addColorStop(0.4,  `rgba(${r},${g},${b},${op * 0.655})`);
-    grd.addColorStop(0.5,  `rgba(${r},${g},${b},${op * 0.500})`);
-    grd.addColorStop(0.6,  `rgba(${r},${g},${b},${op * 0.345})`);
-    grd.addColorStop(0.7,  `rgba(${r},${g},${b},${op * 0.206})`);
-    grd.addColorStop(0.8,  `rgba(${r},${g},${b},${op * 0.095})`);
-    grd.addColorStop(0.9,  `rgba(${r},${g},${b},${op * 0.024})`);
-    grd.addColorStop(1,    `rgba(${r},${g},${b},0)`);
-
-    ctx.fillStyle = grd;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, radio, 0, Math.PI * 2);
-    ctx.fill();
+    // drawImage del gradiente pre-renderizado (mucho más rápido que createRadialGradient)
+    ctx.globalAlpha = op;
+    const img = gradientCache[this.categoria];
+    if (img) ctx.drawImage(img, this.x - radio, this.y - radio, radio * 2, radio * 2);
+    ctx.globalAlpha = 1;
   }
 
   contieneEnMundo(wx, wy) {
     const dx = wx - this.x;
     const dy = wy - this.y;
-    const r = RADIO_BASE * 0.6;
+    const r = RADIO_BASE * 0.55;
     return dx * dx + dy * dy < r * r;
   }
+}
+
+// ============================================================
+// SPATIAL HASH para flocking O(n)
+// ============================================================
+const CELL_SIZE = 360;
+let spatialHash = new Map();
+
+function rebuildSpatialHash() {
+  spatialHash.clear();
+  for (const p of pintitas) {
+    const cx = Math.floor(p.x / CELL_SIZE);
+    const cy = Math.floor(p.y / CELL_SIZE);
+    const key = cx * 100000 + cy;
+    let cell = spatialHash.get(key);
+    if (!cell) { cell = []; spatialHash.set(key, cell); }
+    cell.push(p);
+  }
+}
+
+function getVecinos(x, y) {
+  const cx = Math.floor(x / CELL_SIZE);
+  const cy = Math.floor(y / CELL_SIZE);
+  const vecinos = [];
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      const key = (cx + dx) * 100000 + (cy + dy);
+      const cell = spatialHash.get(key);
+      if (cell) vecinos.push(...cell);
+    }
+  }
+  return vecinos;
 }
 
 // ============================================================
@@ -461,6 +462,10 @@ let mousePrevX = null, mousePrevY = null;
 let ultimoMouseTime = performance.now();
 let hoverWorldX = null, hoverWorldY = null;
 
+let isDragging = false;
+let dragStartSX = 0, dragStartSY = 0;
+let dragDistance = 0;
+
 // ============================================================
 // RENDER LOOP
 // ============================================================
@@ -471,37 +476,34 @@ function render() {
   tiempoGlobal += dt;
 
   // Suavizar cámara
-  const lerp = 0.1;
+  const lerp = 0.12;
   cam.x += (cam.tx - cam.x) * lerp;
   cam.y += (cam.ty - cam.y) * lerp;
   cam.scale += (cam.tscale - cam.scale) * lerp;
 
-  // Decaimiento de velocidad del mouse
+  // Decaimiento de velocidad de mouse
   mouseVel *= Math.pow(0.92, dt / 16);
 
   // Respiración global
   const resp = Math.sin(tiempoGlobal * 0.00045);
 
-  // Actualizar zonas (islas que se mueven)
-  actualizarZonas(tiempoGlobal);
+  // Rebuild spatial hash una vez por frame
+  rebuildSpatialHash();
 
-  // Centroides de color
-  const centroides = calcularCentroides();
-
-  // Fade en espacio-pantalla (antes del transform)
+  // Fade en espacio-pantalla
   ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = 'rgba(3, 3, 3, 0.09)';
+  ctx.fillStyle = 'rgba(3, 3, 3, 0.10)';
   ctx.fillRect(0, 0, W, H);
 
-  // Transform de cámara: todo lo que se dibuja a partir de aquí es en espacio-mundo
+  // Transform de cámara: todo lo que sigue está en espacio-mundo
   ctx.save();
   ctx.translate(W / 2 - cam.x * cam.scale, H / 2 - cam.y * cam.scale);
   ctx.scale(cam.scale, cam.scale);
   ctx.globalCompositeOperation = 'screen';
 
   for (const p of pintitas) {
-    p.recalcularBase();
-    p.actualizar(dt, hoverWorldX, hoverWorldY, mouseVel, centroides);
+    const vecinos = getVecinos(p.x, p.y);
+    p.actualizar(dt, hoverWorldX, hoverWorldY, mouseVel, vecinos, isDragging);
     p.dibujar(ctx, resp);
   }
 
@@ -513,20 +515,18 @@ function render() {
 requestAnimationFrame(render);
 
 // ============================================================
-// CONTROLES DE ZOOM Y PAN
+// CONTROLES: ZOOM Y PAN
 // ============================================================
-let isDragging = false;
-let dragStartSX = 0, dragStartSY = 0;
-let camStartX = 0, camStartY = 0;
-let dragDistance = 0;
 
-// WHEEL (mouse + trackpad pinch)
+// WHEEL - zoom centrado en cursor (mouse) o pinch de trackpad (ctrlKey)
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
-  const factor = Math.exp(-e.deltaY * 0.0015);
+  // Trackpad pinch: ctrlKey activado (estándar en macOS/Windows)
+  // Mouse wheel: ctrlKey ausente
+  const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.012 : 0.0018));
   const newScale = Math.max(cam.MIN_SCALE, Math.min(cam.MAX_SCALE, cam.tscale * factor));
 
-  // Zoom centrado en la posición del cursor
+  // Zoom centrado en posición del cursor
   const rect = canvas.getBoundingClientRect();
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
@@ -538,14 +538,12 @@ canvas.addEventListener('wheel', (e) => {
   cam.ty = wy - (sy - H / 2) / newScale;
 }, { passive: false });
 
-// MOUSE DRAG (pan)
+// MOUSE DRAG - pan
 canvas.addEventListener('mousedown', (e) => {
   isDragging = true;
   dragDistance = 0;
   dragStartSX = e.clientX;
   dragStartSY = e.clientY;
-  camStartX = cam.tx;
-  camStartY = cam.ty;
 });
 
 canvas.addEventListener('mousemove', (e) => {
@@ -553,37 +551,35 @@ canvas.addEventListener('mousemove', (e) => {
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
 
-  // Velocidad del mouse en píxeles de pantalla por segundo
-  if (mousePrevX !== null) {
-    const ahora = performance.now();
-    const dt = Math.max(1, ahora - ultimoMouseTime);
-    const dx = sx - mousePrevX, dy = sy - mousePrevY;
-    const v = Math.sqrt(dx * dx + dy * dy) / dt * 1000;
-    mouseVel = mouseVel * 0.6 + v * 0.4;
-    ultimoMouseTime = ahora;
-  }
-  mousePrevX = sx; mousePrevY = sy;
-  const w = screenToWorld(sx, sy);
-  hoverWorldX = w.x; hoverWorldY = w.y;
-
   if (isDragging) {
     const dx = e.clientX - dragStartSX;
     const dy = e.clientY - dragStartSY;
     dragDistance += Math.abs(dx) + Math.abs(dy);
-    cam.tx = camStartX - dx / cam.scale;
-    cam.ty = camStartY - dy / cam.scale;
-    // Actualizar inicio para movimiento relativo
+    cam.tx -= dx / cam.scale;
+    cam.ty -= dy / cam.scale;
+    cam.x = cam.tx; cam.y = cam.ty; // snap inmediato durante pan para responsividad
     dragStartSX = e.clientX;
     dragStartSY = e.clientY;
-    camStartX = cam.tx;
-    camStartY = cam.ty;
+  } else {
+    // Hover: velocidad para agitación
+    if (mousePrevX !== null) {
+      const t = performance.now();
+      const ddt = Math.max(1, t - ultimoMouseTime);
+      const vdx = sx - mousePrevX, vdy = sy - mousePrevY;
+      const v = Math.sqrt(vdx * vdx + vdy * vdy) / ddt * 1000;
+      mouseVel = mouseVel * 0.6 + v * 0.4;
+      ultimoMouseTime = t;
+    }
+    mousePrevX = sx; mousePrevY = sy;
+    const w = screenToWorld(sx, sy);
+    hoverWorldX = w.x; hoverWorldY = w.y;
   }
 });
 
 canvas.addEventListener('mouseup', async (e) => {
   isDragging = false;
   if (dragDistance < 6) {
-    // Click real: abrir relato
+    // Click sin drag: intentar abrir relato
     const rect = canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
@@ -599,6 +595,7 @@ canvas.addEventListener('mouseup', async (e) => {
     if (target) await abrirRelato(target.respuestaId);
   }
 });
+
 canvas.addEventListener('mouseleave', () => {
   isDragging = false;
   hoverWorldX = null;
@@ -606,13 +603,12 @@ canvas.addEventListener('mouseleave', () => {
   mouseVel = 0;
 });
 
-// TOUCH (pinch + pan + tap)
-let touches = {};
+// TOUCH
 let lastPinchDist = 0;
-let touchPanStartX = 0, touchPanStartY = 0;
-let camTouchStartX = 0, camTouchStartY = 0;
-let touchDragDist = 0;
 let pinchActivo = false;
+let touchPanStartX = 0, touchPanStartY = 0;
+let touchPanLastX = 0, touchPanLastY = 0;
+let touchDragDist = 0;
 
 canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
@@ -623,18 +619,14 @@ canvas.addEventListener('touchstart', (e) => {
     const t = e.touches[0];
     touchPanStartX = t.clientX;
     touchPanStartY = t.clientY;
-    camTouchStartX = cam.tx;
-    camTouchStartY = cam.ty;
-    const rect = canvas.getBoundingClientRect();
-    const sx = t.clientX - rect.left, sy = t.clientY - rect.top;
-    const w = screenToWorld(sx, sy);
-    hoverWorldX = w.x; hoverWorldY = w.y;
-  }
-
-  if (e.touches.length >= 2) {
+    touchPanLastX = t.clientX;
+    touchPanLastY = t.clientY;
+    isDragging = true;
+  } else if (e.touches.length >= 2) {
     const t1 = e.touches[0], t2 = e.touches[1];
     const dx = t2.clientX - t1.clientX, dy = t2.clientY - t1.clientY;
     lastPinchDist = Math.sqrt(dx * dx + dy * dy);
+    isDragging = false;
   }
 }, { passive: false });
 
@@ -642,7 +634,9 @@ canvas.addEventListener('touchmove', (e) => {
   e.preventDefault();
 
   if (e.touches.length >= 2) {
+    // Pinch zoom centrado entre los dedos
     pinchActivo = true;
+    isDragging = false;
     const t1 = e.touches[0], t2 = e.touches[1];
     const dx = t2.clientX - t1.clientX, dy = t2.clientY - t1.clientY;
     const dist = Math.sqrt(dx * dx + dy * dy);
@@ -657,40 +651,31 @@ canvas.addEventListener('touchmove', (e) => {
     cam.ty = wy - (cy - H / 2) / newScale;
     lastPinchDist = dist;
   } else if (e.touches.length === 1 && !pinchActivo) {
+    // Single touch drag: pan
     const t = e.touches[0];
-    const ddx = t.clientX - touchPanStartX;
-    const ddy = t.clientY - touchPanStartY;
-    touchDragDist += Math.abs(ddx) + Math.abs(ddy);
-
-    // Pan
-    cam.tx = camTouchStartX - ddx / cam.scale;
-    cam.ty = camTouchStartY - ddy / cam.scale;
-
-    // Velocidad para agitación
-    const rect = canvas.getBoundingClientRect();
-    const sx = t.clientX - rect.left, sy = t.clientY - rect.top;
-    if (mousePrevX !== null) {
-      const ahora = performance.now();
-      const dt = Math.max(1, ahora - ultimoMouseTime);
-      const vx = sx - mousePrevX, vy = sy - mousePrevY;
-      const v = Math.sqrt(vx * vx + vy * vy) / dt * 1000;
-      mouseVel = mouseVel * 0.6 + v * 0.4;
-      ultimoMouseTime = ahora;
-    }
-    mousePrevX = sx; mousePrevY = sy;
-    const w = screenToWorld(sx, sy);
-    hoverWorldX = w.x; hoverWorldY = w.y;
+    const dx = t.clientX - touchPanLastX;
+    const dy = t.clientY - touchPanLastY;
+    touchDragDist += Math.abs(dx) + Math.abs(dy);
+    cam.tx -= dx / cam.scale;
+    cam.ty -= dy / cam.scale;
+    cam.x = cam.tx; cam.y = cam.ty;
+    touchPanLastX = t.clientX;
+    touchPanLastY = t.clientY;
   }
 }, { passive: false });
 
 canvas.addEventListener('touchend', async (e) => {
   if (e.touches.length === 0) {
     if (!pinchActivo && touchDragDist < 10) {
-      // Tap: abrir relato
+      // Tap (sin drag): abrir relato
+      const rect = canvas.getBoundingClientRect();
+      const sx = touchPanStartX - rect.left;
+      const sy = touchPanStartY - rect.top;
+      const w = screenToWorld(sx, sy);
       let target = null, best = Infinity;
       for (const p of pintitas) {
-        if (hoverWorldX !== null && p.contieneEnMundo(hoverWorldX, hoverWorldY)) {
-          const dx = hoverWorldX - p.x, dy = hoverWorldY - p.y;
+        if (p.contieneEnMundo(w.x, w.y)) {
+          const dx = w.x - p.x, dy = w.y - p.y;
           const d = dx * dx + dy * dy;
           if (d < best) { best = d; target = p; }
         }
@@ -698,14 +683,7 @@ canvas.addEventListener('touchend', async (e) => {
       if (target) await abrirRelato(target.respuestaId);
     }
     pinchActivo = false;
-    setTimeout(() => { hoverWorldX = null; hoverWorldY = null; }, 500);
-  }
-  if (e.touches.length === 1 && !pinchActivo) {
-    const t = e.touches[0];
-    touchPanStartX = t.clientX;
-    touchPanStartY = t.clientY;
-    camTouchStartX = cam.tx;
-    camTouchStartY = cam.ty;
+    isDragging = false;
   }
 }, { passive: false });
 
@@ -779,20 +757,19 @@ let ultimaPintitaId = 0;
 
 async function inicializar() {
   try {
-    const res = await fetch(`${API_BASE}/pintitas_recientes?n=2000`);
+    const res = await fetch(`${API_BASE}/pintitas_recientes?n=4000`);
     const data = await res.json();
     totalRelatos = data.length > 0 ? Math.max(64, Math.round(data.length / 3.5)) : 64;
     data.reverse();
     for (const p of data) {
       if (!pintitasMap.has(p.id)) {
-        pintitas.push(new Pintita(p.id, p.respuesta_id, p.categoria));
+        pintitas.push(new Pintita(p.id, p.respuesta_id, p.categoria, false));
         pintitasMap.set(p.id, true);
         if (p.id > ultimaPintitaId) ultimaPintitaId = p.id;
       }
     }
     actualizarEstado();
-    // Ajustar cámara después de cargar
-    setTimeout(ajustarCamaraGalaxia, 200);
+    setTimeout(ajustarCamaraInicial, 100);
   } catch(e) {
     console.error(e);
     marcarSinConexion();
@@ -849,7 +826,7 @@ function activarMovimiento() {
     const acc = e.accelerationIncludingGravity || e.acceleration;
     if (!acc) return;
     const ax = acc.x || 0, ay = acc.y || 0, az = acc.z || 0;
-    const mag = Math.sqrt(ax*ax + ay*ay + az*az);
+    const mag = Math.sqrt(ax * ax + ay * ay + az * az);
     if (mag > 18) {
       const ahora = performance.now();
       if (ahora - ultimoShake > 200) {
@@ -857,9 +834,9 @@ function activarMovimiento() {
         const inten = Math.min(8, (mag - 18) * 0.6);
         for (const p of pintitas) {
           const dx = p.x - cam.x, dy = p.y - cam.y;
-          const dist = Math.sqrt(dx*dx + dy*dy) || 1;
-          p.ovx += (dx / dist) * inten;
-          p.ovy += (dy / dist) * inten;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          p.vx += (dx / dist) * inten;
+          p.vy += (dy / dist) * inten;
           p.tiempoAgitacion = DURACION_AGITACION;
         }
       }
