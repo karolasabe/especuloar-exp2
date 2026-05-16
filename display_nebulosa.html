@@ -144,6 +144,12 @@ const canvas = document.getElementById('lienzo');
 const ctx = canvas.getContext('2d');
 let W = 0, H = 0;
 
+// Canvas offscreen para componer las gotas antes de aplicarles el filtro de fusión
+// Aquí dibujamos círculos sólidos en coordenadas de pantalla
+// Luego se compone al canvas principal con blur+contrast → efecto metaball (fusión de gotas)
+const fluidoCanvas = document.createElement('canvas');
+const fluidoCtx = fluidoCanvas.getContext('2d');
+
 function ajustarCanvas() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth;
@@ -154,9 +160,39 @@ function ajustarCanvas() {
   canvas.style.height = H + 'px';
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.scale(dpr, dpr);
+
+  fluidoCanvas.width = W * dpr;
+  fluidoCanvas.height = H * dpr;
+  fluidoCtx.setTransform(1, 0, 0, 1, 0, 0);
+  fluidoCtx.scale(dpr, dpr);
 }
 ajustarCanvas();
 window.addEventListener('resize', ajustarCanvas);
+
+// ============================================================
+// TEXTURA DE GRANO — añade carácter pictórico al fluido
+// Una capa de ruido monocromo que se aplica sobre el color con blend soft-light
+// El resultado: las zonas de color se ven texturadas, no lisas digitales
+// ============================================================
+function generarGrano() {
+  const tam = 220;
+  const c = document.createElement('canvas');
+  c.width = tam;
+  c.height = tam;
+  const cx = c.getContext('2d');
+  const img = cx.createImageData(tam, tam);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = 50 + Math.random() * 205;
+    img.data[i]     = v;
+    img.data[i + 1] = v;
+    img.data[i + 2] = v;
+    img.data[i + 3] = 255;
+  }
+  cx.putImageData(img, 0, 0);
+  return c;
+}
+const granoCanvas = generarGrano();
+let granoPattern = null;
 
 // ============================================================
 // FACTOR DE MUNDO
@@ -212,49 +248,58 @@ function hexToRgb(hex) {
   };
 }
 
-function crearGradiente(rgb) {
-  const tam = 256;
+// Solo necesitamos el gradiente CHISPA para la capa de revelación (nodos individuales)
+// Las masas se generan por composición de círculos sólidos + filtro blur+contrast
+function crearGradienteChispa(rgb) {
+  const tam = 128;
   const off = document.createElement('canvas');
   off.width = tam;
   off.height = tam;
   const c = off.getContext('2d');
   const grd = c.createRadialGradient(tam/2, tam/2, 0, tam/2, tam/2, tam/2);
-  // Curva acuarela: núcleo extendido con color firme, desvanecimiento gradual
-  // Los saltos entre stops crecen y luego decrecen suavemente → sin anillos
   grd.addColorStop(0,    `rgba(${rgb.r},${rgb.g},${rgb.b},1.000)`);
-  grd.addColorStop(0.12, `rgba(${rgb.r},${rgb.g},${rgb.b},0.980)`);
-  grd.addColorStop(0.25, `rgba(${rgb.r},${rgb.g},${rgb.b},0.910)`);
-  grd.addColorStop(0.40, `rgba(${rgb.r},${rgb.g},${rgb.b},0.740)`);
-  grd.addColorStop(0.55, `rgba(${rgb.r},${rgb.g},${rgb.b},0.500)`);
-  grd.addColorStop(0.70, `rgba(${rgb.r},${rgb.g},${rgb.b},0.250)`);
-  grd.addColorStop(0.83, `rgba(${rgb.r},${rgb.g},${rgb.b},0.080)`);
-  grd.addColorStop(0.93, `rgba(${rgb.r},${rgb.g},${rgb.b},0.015)`);
+  grd.addColorStop(0.25, `rgba(${rgb.r},${rgb.g},${rgb.b},0.880)`);
+  grd.addColorStop(0.45, `rgba(${rgb.r},${rgb.g},${rgb.b},0.610)`);
+  grd.addColorStop(0.65, `rgba(${rgb.r},${rgb.g},${rgb.b},0.290)`);
+  grd.addColorStop(0.82, `rgba(${rgb.r},${rgb.g},${rgb.b},0.075)`);
+  grd.addColorStop(0.93, `rgba(${rgb.r},${rgb.g},${rgb.b},0.010)`);
   grd.addColorStop(1,    `rgba(${rgb.r},${rgb.g},${rgb.b},0)`);
   c.fillStyle = grd;
   c.fillRect(0, 0, tam, tam);
   return off;
 }
 
-const gradientCache = {};
+const gradChispa = {};
 for (const [cat, info] of Object.entries(CATEGORIAS)) {
-  gradientCache[cat] = crearGradiente(hexToRgb(info.color));
+  gradChispa[cat] = crearGradienteChispa(hexToRgb(info.color));
 }
 
 // ============================================================
 // PINTITA — partícula con flocking en espacio-mundo
+// Sistema visual de DOS CAPAS:
+//   1) METABALL (siempre): círculo sólido pequeño que se fusiona con sus vecinos
+//      del mismo color a través de un filtro blur+contrast, formando zonas amorfas
+//      como gotas de aceite (lámpara de lava). Las gotas chocan y se separan,
+//      siguen el flocking físico pero visualmente se ven como un fluido continuo.
+//   2) CHISPA (sólo al agitar o al integrarse): nodo individual definido encima
+//      de la masa. Revela que hay relatos puntuales dentro del fluido.
 // ============================================================
-const RADIO_BASE = 48;
-const OPACIDAD_BASE = 0.062;
+const BLOB_RADIO_BASE = 17;       // radio de cada partícula de la pincelada (mundo)
+const BLOB_ALPHA = 0.48;          // alfa moderado
+const BLUR_PX = 10;               // suaviza fusión
+const CONTRAST_AMOUNT = 6;        // bordes definidos sin saturar
+const RADIO_CHISPA = 16;
+const OPACIDAD_CHISPA = 0.28;
 const DURACION_AGITACION = 2800;
+const DURACION_INTEGRACION = 9000;
 
-// Flocking calibrado para clusters múltiples estables sin colapso global
-// Inspirado en el display.html original pero en unidades-mundo
-const ATRACCION_DIST = 215;          // alcance corto → no agrupa todo en uno solo
-const ATRACCION_FUERZA = 0.0016;     // suficiente para reconvergencia ágil
+// Flocking
+const ATRACCION_DIST = 215;
+const ATRACCION_FUERZA = 0.0016;
 const REPULSION_CERCANA_DIST = 28;
 const REPULSION_CERCANA_FUERZA = 0.052;
-const REPULSION_INTER_DIST = 58;
-const REPULSION_INTER_FUERZA = 0.0048; // fuerte: mantiene clusters separados
+const REPULSION_INTER_DIST = 105;       // zonas de color claramente separadas
+const REPULSION_INTER_FUERZA = 0.0058;
 
 class Pintita {
   constructor(id, respId, cat, esNueva = false) {
@@ -263,25 +308,38 @@ class Pintita {
     this.categoria = cat;
 
     // Tamaño variable por pintita: la mayoría medianas, algunas grandes (raras), algunas pequeñas
-    // Power 0.7 sesga la distribución hacia tamaños menores con cola larga hacia grandes
     const tamRand = Math.pow(Math.random(), 0.7);
-    this.tamFactor = 0.55 + tamRand * 1.95;  // rango 0.55 a 2.5
+    this.tamFactor = 0.55 + tamRand * 1.95;
 
-    // Opacidad ligeramente variable para textura no homogénea
-    this.opacFactor = 0.78 + Math.random() * 0.5; // rango 0.78 a 1.28
+    this.opacFactor = 0.78 + Math.random() * 0.5;
 
-    // Spawn circular dentro del mundo, sin marco rectangular
+    // PINCELADA: cada pintita es un cluster de 3-5 partículas dispersas
+    // Crea textura granular al fluido (no círculos sólidos lisos)
+    // El brushAngle define la orientación; deriva lentamente como dirección de pincel
+    this.brushAngle = Math.random() * Math.PI * 2;
+    this.brushAngleVel = (Math.random() - 0.5) * 0.00040; // deriva muy lenta
+    const elongation = 0.9 + Math.random() * 1.6; // 0.9 a 2.5
+    this.particles = [];
+    const nP = 3 + Math.floor(Math.random() * 3); // 3, 4 o 5 partículas
+    for (let i = 0; i < nP; i++) {
+      const t = nP > 1 ? (i / (nP - 1) - 0.5) * 1.6 : 0;
+      this.particles.push({
+        along: t * elongation,
+        perp: (Math.random() - 0.5) * 0.55,
+        size: 0.55 + Math.random() * 0.55,
+      });
+    }
+
+    // Spawn circular dentro del mundo
     const maxR = getWorldRadius();
     const angulo = Math.random() * Math.PI * 2;
     const radio = Math.sqrt(Math.random()) * maxR * 0.75;
     this.x = Math.cos(angulo) * radio;
     this.y = Math.sin(angulo) * radio;
 
-    // Velocidad inicial pequeña para arranque orgánico
     this.vx = (Math.random() - 0.5) * 0.5;
     this.vy = (Math.random() - 0.5) * 0.5;
 
-    // Las nuevas pintitas (incoming) vienen desde fuera del mundo
     if (esNueva) {
       const a = Math.random() * Math.PI * 2;
       const r = maxR * 1.1;
@@ -296,17 +354,23 @@ class Pintita {
     this.velFase = 0.0005 + Math.random() * 0.001;
 
     this.tiempoAgitacion = 0;
-    this.edad = 0;
+    this.edad = esNueva ? 0 : DURACION_INTEGRACION + 1;
   }
 
   actualizar(dt, hwx, hwy, mouseVel, vecinos, isDragging) {
     this.edad += dt;
     this.fase += this.velFase * dt;
+    this.brushAngle += this.brushAngleVel * dt;
 
     if (this.tiempoAgitacion > 0)
       this.tiempoAgitacion = Math.max(0, this.tiempoAgitacion - dt);
 
     let ax = 0, ay = 0;
+
+    // Variables para detección de compresión local (anti-colapso)
+    let crowdCx = 0, crowdCy = 0, crowdN = 0;
+    const CROWD_DIST = 85;
+    const CROWD_DIST2 = CROWD_DIST * CROWD_DIST;
 
     // FLOCKING: atracción al mismo color (alcance corto) + repulsión cercana + repulsión inter-color
     for (const o of vecinos) {
@@ -316,6 +380,13 @@ class Pintita {
       const dist2 = dx * dx + dy * dy;
       if (dist2 < 0.1) continue;
       const dist = Math.sqrt(dist2);
+
+      // Cuenta vecinos cercanos para presión anti-compresión (cualquier color)
+      if (dist2 < CROWD_DIST2) {
+        crowdCx += o.x;
+        crowdCy += o.y;
+        crowdN++;
+      }
 
       if (o.categoria === this.categoria) {
         // Atracción suave de alcance corto: forma cúmulos locales, no globales
@@ -339,8 +410,32 @@ class Pintita {
       }
     }
 
-    // Agitación por velocidad del cursor (solo cuando NO se está paneando)
-    if (!isDragging && hwx !== null && mouseVel > 180) {
+    // PRESIÓN ANTI-COLAPSO (mecánica de lámpara de lava)
+    // Cuando la densidad local supera un umbral, esta pintita siente presión hacia afuera
+    // desde el centroide del enjambre cercano. Más vecinos = más presión.
+    // Esto evita que el sistema entero converja en una masa única; produce ciclos
+    // orgánicos de compresión y expansión.
+    const CROWD_UMBRAL = 14;
+    if (crowdN > CROWD_UMBRAL) {
+      crowdCx /= crowdN;
+      crowdCy /= crowdN;
+      let dxC = this.x - crowdCx;
+      let dyC = this.y - crowdCy;
+      let dC = Math.sqrt(dxC * dxC + dyC * dyC);
+      // Si la pintita está casi en el centroide, dispara en dirección aleatoria
+      if (dC < 1) {
+        const a = Math.random() * Math.PI * 2;
+        dxC = Math.cos(a); dyC = Math.sin(a); dC = 1;
+      }
+      const fPresion = (crowdN - CROWD_UMBRAL) * 0.0022;
+      ax += (dxC / dC) * fPresion;
+      ay += (dyC / dC) * fPresion;
+    }
+
+    // Agitación por velocidad del cursor/dedo
+    // Funciona durante drag (móvil): si el dedo se mueve rápido, agita las pintitas cercanas
+    // Movimientos lentos solo panean (velocidad bajo umbral)
+    if (hwx !== null && mouseVel > 180) {
       const dx = this.x - hwx;
       const dy = this.y - hwy;
       const dist2 = dx * dx + dy * dy;
@@ -349,28 +444,24 @@ class Pintita {
         const dist = Math.sqrt(dist2);
         const fd = (rInfl - dist) / rInfl;
         const ve = Math.min(2.8, (mouseVel - 180) / 350);
-        const f = fd * ve * 0.38;  // empuje moderado: pintitas se apartan pero vuelven rápido
+        const f = fd * ve * 0.38;
         ax += (dx / dist) * f;
         ay += (dy / dist) * f;
         if (f > 0.04) this.tiempoAgitacion = DURACION_AGITACION;
       }
     }
 
-    // Frontera circular MUY laxa: solo aplica si la pintita se aleja muchísimo
-    // No define el contorno visible; la forma emerge del flocking
+    // Frontera circular MUY laxa: solo actúa si una pintita se aleja muchísimo
+    // No define el contorno visible; la forma emerge del flocking + viento + presión
     const distCentro = Math.sqrt(this.x * this.x + this.y * this.y);
     const maxR = getWorldRadius();
-    if (distCentro > maxR * 1.15 && distCentro > 0.1) {
-      const exceso = distCentro - maxR * 1.15;
-      const pull = exceso * 0.0005;
+    if (distCentro > maxR * 1.2 && distCentro > 0.1) {
+      const exceso = distCentro - maxR * 1.2;
+      const pull = exceso * 0.0006;
       ax -= (this.x / distCentro) * pull;
       ay -= (this.y / distCentro) * pull;
     }
-
-    // Atracción muy débil al centro para mantener cercanía entre clusters
-    // Es lo suficientemente sutil como para no crear forma circular
-    ax += -this.x * 0.000004;
-    ay += -this.y * 0.000004;
+    // No hay atracción al centro: la presión anti-colapso reemplaza el cohesivo global
 
     // CAMPO DE VIENTO COHERENTE — transhumancia
     // Fuerzas suaves que varían según posición espacial y tiempo
@@ -385,8 +476,8 @@ class Pintita {
     const windY =
       Math.cos(this.y * wsLento + tiempoGlobal * wtLento * 1.13) * 0.70 +
       Math.cos(this.y * wsRapid + this.x * 0.005 + tiempoGlobal * wtRapid * 1.21 + 0.7) * 0.30;
-    ax += windX * 0.006;
-    ay += windY * 0.006;
+    ax += windX * 0.0085;
+    ay += windY * 0.0085;
 
     // Ruido browniano leve para textura orgánica (menor que antes: la migración la da el viento)
     ax += (Math.random() - 0.5) * 0.012;
@@ -420,40 +511,11 @@ class Pintita {
     this.opacidadFiltro += (this.opacidadFiltroObjetivo - this.opacidadFiltro) * 0.05;
   }
 
-  dibujar(ctx, resp) {
-    if (this.opacidadFiltro < 0.005) return;
-
-    // Tamaño individual: la mayoría medianas, algunas notablemente más grandes
-    const radioInd = RADIO_BASE * this.tamFactor;
-
-    // Frustum culling en pantalla
-    const sx = (this.x - cam.x) * cam.scale + W / 2;
-    const sy = (this.y - cam.y) * cam.scale + H / 2;
-    const sr = (radioInd + 10) * cam.scale;
-    if (sx + sr < 0 || sx - sr > W) return;
-    if (sy + sr < 0 || sy - sr > H) return;
-
-    // Respiración propia y global, proporcional al tamaño
-    const escalaResp = Math.sqrt(this.tamFactor);
-    const respProp = Math.sin(this.fase) * 2.4 * escalaResp;
-    const respGlob = resp * 3.2 * escalaResp;
-    const radio = Math.max(2, radioInd + respProp + respGlob);
-
-    const pOpac = 1 + resp * 0.08;
-    const fade = Math.min(1, this.edad / 4500);
-    const op = OPACIDAD_BASE * fade * pOpac * this.opacidadFiltro * this.opacFactor;
-
-    // drawImage del gradiente acuarela pre-renderizado
-    ctx.globalAlpha = op;
-    const img = gradientCache[this.categoria];
-    if (img) ctx.drawImage(img, this.x - radio, this.y - radio, radio * 2, radio * 2);
-    ctx.globalAlpha = 1;
-  }
-
   contieneEnMundo(wx, wy) {
     const dx = wx - this.x;
     const dy = wy - this.y;
-    const r = RADIO_BASE * this.tamFactor * 0.5;
+    // Hit-test sobre la zona visible de la masa fluida (incluye el halo del blur)
+    const r = BLOB_RADIO_BASE * this.tamFactor * 1.4;
     return dx * dx + dy * dy < r * r;
   }
 }
@@ -509,7 +571,7 @@ let dragStartSX = 0, dragStartSY = 0;
 let dragDistance = 0;
 
 // ============================================================
-// RENDER LOOP
+// RENDER LOOP — sistema metaball (gotas de aceite que se fusionan)
 // ============================================================
 function render() {
   const ahora = performance.now();
@@ -529,28 +591,110 @@ function render() {
   // Respiración global
   const resp = Math.sin(tiempoGlobal * 0.00045);
 
-  // Rebuild spatial hash una vez por frame
+  // ─── FÍSICA ───
+  // Spatial hash y actualización de posiciones (en espacio-mundo)
   rebuildSpatialHash();
-
-  // Fade en espacio-pantalla
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = 'rgba(3, 3, 3, 0.10)';
-  ctx.fillRect(0, 0, W, H);
-
-  // Transform de cámara: todo lo que sigue está en espacio-mundo
-  ctx.save();
-  ctx.translate(W / 2 - cam.x * cam.scale, H / 2 - cam.y * cam.scale);
-  ctx.scale(cam.scale, cam.scale);
-  ctx.globalCompositeOperation = 'screen';
-
   for (const p of pintitas) {
     const vecinos = getVecinos(p.x, p.y);
     p.actualizar(dt, hoverWorldX, hoverWorldY, mouseVel, vecinos, isDragging);
-    p.dibujar(ctx, resp);
   }
 
-  ctx.restore();
+  // ─── RENDER ───
+
+  // Fondo: fade leve para suavizar transiciones de la capa de chispas
   ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = 'rgba(3, 3, 3, 0.18)';
+  ctx.fillRect(0, 0, W, H);
+
+  // CAPA 1: METABALL FLUIDO
+  // Limpio la capa fluida y dibujo círculos sólidos coloreados en coords de pantalla
+  fluidoCtx.clearRect(0, 0, W, H);
+  fluidoCtx.globalCompositeOperation = 'source-over';
+
+  for (const p of pintitas) {
+    if (p.opacidadFiltro < 0.005) continue;
+
+    // World → screen
+    const sx = (p.x - cam.x) * cam.scale + W / 2;
+    const sy = (p.y - cam.y) * cam.scale + H / 2;
+
+    // Radio base en pixels (escala con cámara)
+    const escalaResp = Math.sqrt(p.tamFactor);
+    const respProp = Math.sin(p.fase) * 0.9 * escalaResp;
+    const respGlob = resp * 1.2 * escalaResp;
+    const radioMundo = BLOB_RADIO_BASE * p.tamFactor + respProp + respGlob;
+    const sr = radioMundo * cam.scale;
+
+    // Frustum cull (con margen para la pincelada extendida)
+    const cullMargin = sr * 4 + 40;
+    if (sr < 0.3) continue;
+    if (sx + cullMargin < 0 || sx - cullMargin > W) continue;
+    if (sy + cullMargin < 0 || sy - cullMargin > H) continue;
+
+    const fade = Math.min(1, p.edad / 4500);
+    fluidoCtx.globalAlpha = BLOB_ALPHA * fade * p.opacidadFiltro * p.opacFactor;
+    fluidoCtx.fillStyle = CATEGORIAS[p.categoria].color;
+
+    // PINCELADA: dibuja las partículas alineadas según brushAngle
+    // Cada partícula es un círculo pequeño; el conjunto forma una pincelada texturizada
+    const cosA = Math.cos(p.brushAngle);
+    const sinA = Math.sin(p.brushAngle);
+    for (const part of p.particles) {
+      const px = sx + (part.along * cosA - part.perp * sinA) * sr;
+      const py = sy + (part.along * sinA + part.perp * cosA) * sr;
+      const psize = Math.max(0.5, part.size * sr * 0.85);
+      fluidoCtx.beginPath();
+      fluidoCtx.arc(px, py, psize, 0, Math.PI * 2);
+      fluidoCtx.fill();
+    }
+  }
+
+  // Componer la capa fluida sobre el canvas principal con filtro blur+contrast
+  // → blur expande y solapa las gotas vecinas; contrast snap-ea bordes definidos
+  // → resultado: metaballs (gotas que se fusionan al acercarse, se separan al alejarse)
+  const blur = Math.min(60, Math.max(3, BLUR_PX * cam.scale));
+  ctx.filter = `blur(${blur}px) contrast(${CONTRAST_AMOUNT})`;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.drawImage(fluidoCanvas, 0, 0, W, H);
+  ctx.filter = 'none';
+
+  // CAPA INTERMEDIA: textura de grano sobre las zonas de color
+  // soft-light multiplica la luminosidad del grano sobre el color
+  // → carácter pictórico, como pinceladas sobre lienzo, no superficie digital lisa
+  if (!granoPattern) granoPattern = ctx.createPattern(granoCanvas, 'repeat');
+  ctx.globalCompositeOperation = 'soft-light';
+  ctx.globalAlpha = 0.85;
+  ctx.fillStyle = granoPattern;
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+
+  // CAPA 2: CHISPAS (nodos individuales revelados)
+  // Solo se dibujan cuando la pintita está agitada o es reciente
+  // source-over (no screen): evita acumulación hacia blanco
+  ctx.globalCompositeOperation = 'source-over';
+  for (const p of pintitas) {
+    if (p.opacidadFiltro < 0.005) continue;
+    const fAgit = p.tiempoAgitacion / DURACION_AGITACION;
+    const fEdad = Math.max(0, 1 - p.edad / DURACION_INTEGRACION);
+    const chispa = Math.max(fAgit, fEdad * 0.85);
+    if (chispa < 0.03) continue;
+
+    const sx = (p.x - cam.x) * cam.scale + W / 2;
+    const sy = (p.y - cam.y) * cam.scale + H / 2;
+    const escalaResp = Math.sqrt(p.tamFactor);
+    const radioChispa = RADIO_CHISPA * escalaResp * cam.scale;
+
+    if (sx + radioChispa < 0 || sx - radioChispa > W) continue;
+    if (sy + radioChispa < 0 || sy - radioChispa > H) continue;
+
+    ctx.globalAlpha = OPACIDAD_CHISPA * chispa * p.opacidadFiltro;
+    ctx.drawImage(gradChispa[p.categoria],
+      sx - radioChispa, sy - radioChispa,
+      radioChispa * 2, radioChispa * 2);
+  }
+  ctx.globalAlpha = 1;
 
   requestAnimationFrame(render);
 }
@@ -693,16 +837,35 @@ canvas.addEventListener('touchmove', (e) => {
     cam.ty = wy - (cy - H / 2) / newScale;
     lastPinchDist = dist;
   } else if (e.touches.length === 1 && !pinchActivo) {
-    // Single touch drag: pan
+    // Single touch drag: pan + tracking de velocidad para agitación
     const t = e.touches[0];
     const dx = t.clientX - touchPanLastX;
     const dy = t.clientY - touchPanLastY;
     touchDragDist += Math.abs(dx) + Math.abs(dy);
+
+    // Paneo de cámara
     cam.tx -= dx / cam.scale;
     cam.ty -= dy / cam.scale;
     cam.x = cam.tx; cam.y = cam.ty;
     touchPanLastX = t.clientX;
     touchPanLastY = t.clientY;
+
+    // Tracking de velocidad y posición en mundo para que el dedo agite las pintitas
+    // Si movimiento es lento → solo panea. Si es rápido → además agita.
+    const rect = canvas.getBoundingClientRect();
+    const sx = t.clientX - rect.left;
+    const sy = t.clientY - rect.top;
+    if (mousePrevX !== null) {
+      const ahora = performance.now();
+      const ddt = Math.max(1, ahora - ultimoMouseTime);
+      const vdx = sx - mousePrevX, vdy = sy - mousePrevY;
+      const v = Math.sqrt(vdx * vdx + vdy * vdy) / ddt * 1000;
+      mouseVel = mouseVel * 0.6 + v * 0.4;
+      ultimoMouseTime = ahora;
+    }
+    mousePrevX = sx; mousePrevY = sy;
+    const wp = screenToWorld(sx, sy);
+    hoverWorldX = wp.x; hoverWorldY = wp.y;
   }
 }, { passive: false });
 
@@ -726,6 +889,17 @@ canvas.addEventListener('touchend', async (e) => {
     }
     pinchActivo = false;
     isDragging = false;
+  } else if (e.touches.length === 1 && pinchActivo) {
+    // De dos dedos a uno: re-anclar el touch restante como nuevo punto de pan
+    // y desactivar pinchActivo para que el siguiente touchmove panee correctamente
+    const t = e.touches[0];
+    touchPanStartX = t.clientX;
+    touchPanStartY = t.clientY;
+    touchPanLastX = t.clientX;
+    touchPanLastY = t.clientY;
+    touchDragDist = 100; // ya no se considera tap
+    pinchActivo = false;
+    isDragging = true;
   }
 }, { passive: false });
 
@@ -869,17 +1043,19 @@ function activarMovimiento() {
     if (!acc) return;
     const ax = acc.x || 0, ay = acc.y || 0, az = acc.z || 0;
     const mag = Math.sqrt(ax * ax + ay * ay + az * az);
-    if (mag > 18) {
+    if (mag > 14) {
       const ahora = performance.now();
       if (ahora - ultimoShake > 200) {
         ultimoShake = ahora;
-        const inten = Math.min(8, (mag - 18) * 0.6);
+        // Intensidad muy gradual: a más agitación, más movimiento
+        // Cada pintita recibe su propia dirección y magnitud aleatorias
+        // (sin coordinación radial ni traslación global → no parece supernova)
+        const inten = Math.min(1.4, (mag - 14) * 0.06);
         for (const p of pintitas) {
-          const dx = p.x - cam.x, dy = p.y - cam.y;
-          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          p.vx += (dx / dist) * inten;
-          p.vy += (dy / dist) * inten;
-          p.tiempoAgitacion = DURACION_AGITACION;
+          const a = Math.random() * Math.PI * 2;
+          const m = inten * (0.4 + Math.random() * 0.6);
+          p.vx += Math.cos(a) * m;
+          p.vy += Math.sin(a) * m;
         }
       }
     }
