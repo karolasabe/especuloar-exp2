@@ -145,10 +145,12 @@ const ctx = canvas.getContext('2d');
 let W = 0, H = 0;
 
 // Canvas offscreen para componer las gotas antes de aplicarles el filtro de fusión
-// Aquí dibujamos círculos sólidos en coordenadas de pantalla
-// Luego se compone al canvas principal con blur+contrast → efecto metaball (fusión de gotas)
 const fluidoCanvas = document.createElement('canvas');
 const fluidoCtx = fluidoCanvas.getContext('2d');
+
+// Canvas offscreen para enmascarar el grano a las zonas de color
+const granoMaskCanvas = document.createElement('canvas');
+const granoMaskCtx = granoMaskCanvas.getContext('2d');
 
 function ajustarCanvas() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -165,6 +167,11 @@ function ajustarCanvas() {
   fluidoCanvas.height = H * dpr;
   fluidoCtx.setTransform(1, 0, 0, 1, 0, 0);
   fluidoCtx.scale(dpr, dpr);
+
+  granoMaskCanvas.width = W * dpr;
+  granoMaskCanvas.height = H * dpr;
+  granoMaskCtx.setTransform(1, 0, 0, 1, 0, 0);
+  granoMaskCtx.scale(dpr, dpr);
 }
 ajustarCanvas();
 window.addEventListener('resize', ajustarCanvas);
@@ -601,13 +608,11 @@ function render() {
 
   // ─── RENDER ───
 
-  // Fondo: fade leve para suavizar transiciones de la capa de chispas
+  // Limpio totalmente el canvas principal (sin fade de fondo: el fondo será negro puro)
   ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = 'rgba(3, 3, 3, 0.18)';
-  ctx.fillRect(0, 0, W, H);
+  ctx.clearRect(0, 0, W, H);
 
   // CAPA 1: METABALL FLUIDO
-  // Limpio la capa fluida y dibujo círculos sólidos coloreados en coords de pantalla
   fluidoCtx.clearRect(0, 0, W, H);
   fluidoCtx.globalCompositeOperation = 'source-over';
 
@@ -659,14 +664,20 @@ function render() {
   ctx.drawImage(fluidoCanvas, 0, 0, W, H);
   ctx.filter = 'none';
 
-  // CAPA INTERMEDIA: textura de grano sobre las zonas de color
-  // soft-light multiplica la luminosidad del grano sobre el color
-  // → carácter pictórico, como pinceladas sobre lienzo, no superficie digital lisa
-  if (!granoPattern) granoPattern = ctx.createPattern(granoCanvas, 'repeat');
+  // CAPA INTERMEDIA: grano SOLO sobre las zonas de color
+  // 1) Construyo una máscara de grano: pattern + destination-in con la imagen del canvas
+  // 2) El resultado tiene grano solo donde había color en el canvas principal
+  // 3) Lo aplico al canvas con soft-light → textura pictórica sin tocar el fondo negro
+  if (!granoPattern) granoPattern = granoMaskCtx.createPattern(granoCanvas, 'repeat');
+  granoMaskCtx.globalCompositeOperation = 'source-over';
+  granoMaskCtx.fillStyle = granoPattern;
+  granoMaskCtx.fillRect(0, 0, W, H);
+  granoMaskCtx.globalCompositeOperation = 'destination-in';
+  granoMaskCtx.drawImage(canvas, 0, 0, W, H);
+
   ctx.globalCompositeOperation = 'soft-light';
-  ctx.globalAlpha = 0.85;
-  ctx.fillStyle = granoPattern;
-  ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 0.75;
+  ctx.drawImage(granoMaskCanvas, 0, 0, W, H);
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
 
@@ -695,6 +706,16 @@ function render() {
       radioChispa * 2, radioChispa * 2);
   }
   ctx.globalAlpha = 1;
+
+  // CAPA FINAL: fondo negro detrás de todo lo demás
+  // Pulsación atmosférica muy lenta y muy sutil: ciclo de ~90 segundos
+  // Variación de luminosidad entre rgb(1,1,2) y rgb(5,5,7) — apenas perceptible
+  const pulse = (Math.sin(tiempoGlobal * 0.00007) + 1) * 0.5;
+  const bg = Math.floor(1 + pulse * 4);
+  ctx.globalCompositeOperation = 'destination-over';
+  ctx.fillStyle = `rgb(${bg}, ${bg}, ${bg + 2})`;
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'source-over';
 
   requestAnimationFrame(render);
 }
