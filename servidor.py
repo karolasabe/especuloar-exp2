@@ -127,7 +127,7 @@ CATEGORIAS = {
         ]
     },
     'profesional_masculino': {
-        'color': '#1F3A6B',
+        'color': '#9E9E9E',
         'nombre_es': 'profesional masculino',
         'nombre_en': 'male healthcare professional',
         'palabras': [
