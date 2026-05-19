@@ -105,7 +105,7 @@
   </div>
 </div>
 
-<div class="zoom-hint">agita el cursor para revelar relatos · pellizca / rueda para zoom · arrastra para mover</div>
+<div class="zoom-hint">desktop: cursor revela · rueda zoom · arrastra · móvil: 1 dedo agita · 2 dedos navegan / zoom</div>
 
 <div id="modal" role="dialog" aria-modal="true">
   <div class="modal-contenido">
@@ -130,7 +130,7 @@ const CATEGORIAS = {
   'sensaciones_agradables':    { color: '#D4847A', nombre: 'Sensaciones agradables / seguridad / calma' },
   'normalizacion':             { color: '#6BBF8A', nombre: 'Normalización / resignación' },
   'vivencia_sexual_traumatica':{ color: '#B814E8', nombre: 'Violencia sexual' },
-  'profesional_masculino':     { color: '#9E9E9E', nombre: 'Profesional de salud masculino presente' },
+  'profesional_masculino':     { color: '#1F3A6B', nombre: 'Profesional de salud masculino presente' },
   'profesional_femenino':      { color: '#F5DD2C', nombre: 'Profesional mujer' }
 };
 
@@ -276,7 +276,7 @@ const BLOB_ALPHA = 0.48;
 const BLUR_PX = 10;
 const CONTRAST_AMOUNT = 6;
 const RADIO_CHISPA = 16;
-const OPACIDAD_CHISPA = 0.28;
+const OPACIDAD_CHISPA = 0.22;
 const DURACION_AGITACION = 2800;
 const DURACION_INTEGRACION = 9000;
 
@@ -297,17 +297,19 @@ class Pintita {
     this.tamFactor = 0.55 + tamRand * 1.95;
     this.opacFactor = 0.78 + Math.random() * 0.5;
 
+    // PINCELADA: cluster elongado de 3 a 5 partículas
+    // Elongación amplia (1.6 a 3.4) para que el carácter pictórico se note después del filtro
     this.brushAngle = Math.random() * Math.PI * 2;
-    this.brushAngleVel = (Math.random() - 0.5) * 0.00040;
-    const elongation = 0.9 + Math.random() * 1.6;
+    this.brushAngleVel = (Math.random() - 0.5) * 0.00050;
+    const elongation = 1.6 + Math.random() * 1.8;
     this.particles = [];
     const nP = 3 + Math.floor(Math.random() * 3);
     for (let i = 0; i < nP; i++) {
-      const t = nP > 1 ? (i / (nP - 1) - 0.5) * 1.6 : 0;
+      const t = nP > 1 ? (i / (nP - 1) - 0.5) * 2.0 : 0;
       this.particles.push({
         along: t * elongation,
-        perp: (Math.random() - 0.5) * 0.55,
-        size: 0.55 + Math.random() * 0.55,
+        perp: (Math.random() - 0.5) * 0.7,
+        size: 0.5 + Math.random() * 0.55,
       });
     }
 
@@ -334,7 +336,7 @@ class Pintita {
     this.edad = esNueva ? 0 : DURACION_INTEGRACION + 1;
   }
 
-  actualizar(dt, hwx, hwy, mouseVel, vecinos, isDragging) {
+  actualizar(dt, hwx, hwy, mouseVel, vecinos) {
     this.edad += dt;
     this.fase += this.velFase * dt;
     this.brushAngle += this.brushAngleVel * dt;
@@ -396,6 +398,7 @@ class Pintita {
       ay += (dyC / dC) * fPresion;
     }
 
+    // Agitación por cursor / dedo (cuando mouseVel supera umbral)
     if (hwx !== null && mouseVel > 180) {
       const dx = this.x - hwx;
       const dy = this.y - hwy;
@@ -463,7 +466,7 @@ class Pintita {
   contieneEnMundo(wx, wy) {
     const dx = wx - this.x;
     const dy = wy - this.y;
-    const r = BLOB_RADIO_BASE * this.tamFactor * 1.4;
+    const r = BLOB_RADIO_BASE * this.tamFactor * 1.6;
     return dx * dx + dy * dy < r * r;
   }
 }
@@ -539,7 +542,7 @@ function render() {
   rebuildSpatialHash();
   for (const p of pintitas) {
     const vecinos = getVecinos(p.x, p.y);
-    p.actualizar(dt, hoverWorldX, hoverWorldY, mouseVel, vecinos, isDragging);
+    p.actualizar(dt, hoverWorldX, hoverWorldY, mouseVel, vecinos);
   }
 
   ctx.globalCompositeOperation = 'source-over';
@@ -561,7 +564,7 @@ function render() {
     const radioMundo = BLOB_RADIO_BASE * p.tamFactor + respProp + respGlob;
     const sr = radioMundo * cam.scale;
 
-    const cullMargin = sr * 4 + 40;
+    const cullMargin = sr * 5 + 60;
     if (sr < 0.3) continue;
     if (sx + cullMargin < 0 || sx - cullMargin > W) continue;
     if (sy + cullMargin < 0 || sy - cullMargin > H) continue;
@@ -575,7 +578,7 @@ function render() {
     for (const part of p.particles) {
       const px = sx + (part.along * cosA - part.perp * sinA) * sr;
       const py = sy + (part.along * sinA + part.perp * cosA) * sr;
-      const psize = Math.max(0.5, part.size * sr * 0.85);
+      const psize = Math.max(0.5, part.size * sr * 0.78);
       fluidoCtx.beginPath();
       fluidoCtx.arc(px, py, psize, 0, Math.PI * 2);
       fluidoCtx.fill();
@@ -627,13 +630,19 @@ function render() {
   }
   ctx.globalAlpha = 1;
 
-  // CAPA FINAL: fondo negro con pulsación atmosférica muy lenta
-  // Ciclo único de ~3 minutos, muy sutil (1-3 en vez de 1-5)
-  // Intervalos largos de calma en lugar de ritmo cardíaco
-  const pulse = (Math.sin(tiempoGlobal * 0.000035) + 1) * 0.5;
-  const bg = Math.floor(1 + pulse * 2);
+  // CAPA FINAL: fondo negro con palpitación atmosférica
+  // Una sola onda muy lenta (~5.5 min) elevada a la potencia 3.5:
+  //   - durante la fase negativa (~2.75 min): negro absoluto
+  //   - durante la fase positiva, sólo cerca del pico (~30 seg) sube el brillo
+  //   - el resto: prácticamente negro
+  // El pow concentra la respiración en un instante breve, no en un latido rítmico
+  // El brillo máximo alcanza rgb(7,7,9): apenas perceptible pero suficiente para
+  // que la pieza "respire" y el fondo gane presencia atmosférica
+  const onda = Math.sin(tiempoGlobal * 0.0000190); // período ~5.5 min
+  const pulse = Math.pow(Math.max(0, onda), 3.5);
+  const bg = Math.floor(pulse * 7);
   ctx.globalCompositeOperation = 'destination-over';
-  ctx.fillStyle = `rgb(${bg}, ${bg}, ${bg + 1})`;
+  ctx.fillStyle = `rgb(${bg}, ${bg}, ${bg + 2})`;
   ctx.fillRect(0, 0, W, H);
   ctx.globalCompositeOperation = 'source-over';
 
@@ -642,7 +651,7 @@ function render() {
 requestAnimationFrame(render);
 
 // ============================================================
-// CONTROLES
+// CONTROLES DESKTOP
 // ============================================================
 
 canvas.addEventListener('wheel', (e) => {
@@ -723,86 +732,140 @@ canvas.addEventListener('mouseleave', () => {
   mouseVel = 0;
 });
 
-let lastPinchDist = 0;
-let pinchActivo = false;
-let touchPanStartX = 0, touchPanStartY = 0;
-let touchPanLastX = 0, touchPanLastY = 0;
-let touchDragDist = 0;
+// ============================================================
+// CONTROLES TOUCH (MÓVIL)
+// MODELO INVERTIDO respecto al estándar:
+//   1 dedo  → agitar las pintitas (la pantalla NO se mueve)
+//   2 dedos → navegar (pan + zoom simultáneos)
+// Esto se debe a que el dedo único actúa como "stick" sensorial que
+// estimula la pintura. El movimiento de cámara queda reservado al
+// gesto bimanual, deliberado.
+// ============================================================
+let touchSingleStartX = 0, touchSingleStartY = 0;
+let touchSingleLastX = 0, touchSingleLastY = 0;
+let touchSingleDragDist = 0;
+let touchSingleActive = false;
+
+let twoFingerCenterX = 0, twoFingerCenterY = 0;
+let twoFingerDist = 0;
+let twoFingerActive = false;
 
 canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
-  pinchActivo = e.touches.length >= 2;
-  touchDragDist = 0;
 
-  if (e.touches.length === 1) {
+  if (e.touches.length === 1 && !twoFingerActive) {
+    // Un dedo: modo agitación
     const t = e.touches[0];
-    touchPanStartX = t.clientX;
-    touchPanStartY = t.clientY;
-    touchPanLastX = t.clientX;
-    touchPanLastY = t.clientY;
-    isDragging = true;
+    touchSingleStartX = t.clientX;
+    touchSingleStartY = t.clientY;
+    touchSingleLastX = t.clientX;
+    touchSingleLastY = t.clientY;
+    touchSingleDragDist = 0;
+    touchSingleActive = true;
+
+    // Inicializar tracking de hover y velocidad
+    const rect = canvas.getBoundingClientRect();
+    const sx = t.clientX - rect.left;
+    const sy = t.clientY - rect.top;
+    mousePrevX = sx;
+    mousePrevY = sy;
+    ultimoMouseTime = performance.now();
+    const w = screenToWorld(sx, sy);
+    hoverWorldX = w.x;
+    hoverWorldY = w.y;
   } else if (e.touches.length >= 2) {
+    // Dos dedos: modo navegación. Cancela agitación si estaba activa
+    touchSingleActive = false;
+    mouseVel = 0;
+    hoverWorldX = null;
+    hoverWorldY = null;
+
     const t1 = e.touches[0], t2 = e.touches[1];
-    const dx = t2.clientX - t1.clientX, dy = t2.clientY - t1.clientY;
-    lastPinchDist = Math.sqrt(dx * dx + dy * dy);
-    isDragging = false;
+    const dx = t2.clientX - t1.clientX;
+    const dy = t2.clientY - t1.clientY;
+    twoFingerDist = Math.sqrt(dx * dx + dy * dy);
+    twoFingerCenterX = (t1.clientX + t2.clientX) / 2;
+    twoFingerCenterY = (t1.clientY + t2.clientY) / 2;
+    twoFingerActive = true;
   }
 }, { passive: false });
 
 canvas.addEventListener('touchmove', (e) => {
   e.preventDefault();
 
-  if (e.touches.length >= 2) {
-    pinchActivo = true;
-    isDragging = false;
-    const t1 = e.touches[0], t2 = e.touches[1];
-    const dx = t2.clientX - t1.clientX, dy = t2.clientY - t1.clientY;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    const factor = dist / lastPinchDist;
-    const newScale = Math.max(cam.MIN_SCALE, Math.min(cam.MAX_SCALE, cam.tscale * factor));
-    const cx = (t1.clientX + t2.clientX) / 2;
-    const cy = (t1.clientY + t2.clientY) / 2;
-    const wx = (cx - W / 2) / cam.tscale + cam.tx;
-    const wy = (cy - H / 2) / cam.tscale + cam.ty;
-    cam.tscale = newScale;
-    cam.tx = wx - (cx - W / 2) / newScale;
-    cam.ty = wy - (cy - H / 2) / newScale;
-    lastPinchDist = dist;
-  } else if (e.touches.length === 1 && !pinchActivo) {
+  if (e.touches.length === 1 && touchSingleActive) {
+    // UN DEDO: solo agitación. La cámara NO se mueve
     const t = e.touches[0];
-    const dx = t.clientX - touchPanLastX;
-    const dy = t.clientY - touchPanLastY;
-    touchDragDist += Math.abs(dx) + Math.abs(dy);
-
-    cam.tx -= dx / cam.scale;
-    cam.ty -= dy / cam.scale;
-    cam.x = cam.tx; cam.y = cam.ty;
-    touchPanLastX = t.clientX;
-    touchPanLastY = t.clientY;
+    const dxScreen = t.clientX - touchSingleLastX;
+    const dyScreen = t.clientY - touchSingleLastY;
+    touchSingleDragDist += Math.abs(dxScreen) + Math.abs(dyScreen);
 
     const rect = canvas.getBoundingClientRect();
     const sx = t.clientX - rect.left;
     const sy = t.clientY - rect.top;
+
+    // Velocidad del dedo en pixels/segundo (igual que mouse hover)
     if (mousePrevX !== null) {
       const ahora = performance.now();
       const ddt = Math.max(1, ahora - ultimoMouseTime);
       const vdx = sx - mousePrevX, vdy = sy - mousePrevY;
       const v = Math.sqrt(vdx * vdx + vdy * vdy) / ddt * 1000;
-      mouseVel = mouseVel * 0.6 + v * 0.4;
+      mouseVel = mouseVel * 0.55 + v * 0.45;
       ultimoMouseTime = ahora;
     }
     mousePrevX = sx; mousePrevY = sy;
-    const wp = screenToWorld(sx, sy);
-    hoverWorldX = wp.x; hoverWorldY = wp.y;
+    const w = screenToWorld(sx, sy);
+    hoverWorldX = w.x;
+    hoverWorldY = w.y;
+
+    touchSingleLastX = t.clientX;
+    touchSingleLastY = t.clientY;
+  } else if (e.touches.length >= 2 && twoFingerActive) {
+    // DOS DEDOS: pan (traslación del punto medio) + zoom (cambio de distancia)
+    const t1 = e.touches[0], t2 = e.touches[1];
+    const dx = t2.clientX - t1.clientX;
+    const dy = t2.clientY - t1.clientY;
+    const newDist = Math.sqrt(dx * dx + dy * dy);
+    const newCenterX = (t1.clientX + t2.clientX) / 2;
+    const newCenterY = (t1.clientY + t2.clientY) / 2;
+
+    // PAN: el punto medio entre los dedos se traslada
+    const panDx = newCenterX - twoFingerCenterX;
+    const panDy = newCenterY - twoFingerCenterY;
+    cam.tx -= panDx / cam.scale;
+    cam.ty -= panDy / cam.scale;
+    cam.x = cam.tx; cam.y = cam.ty;
+
+    // ZOOM: cambio relativo de distancia entre dedos, centrado en punto medio
+    if (twoFingerDist > 1) {
+      const factor = newDist / twoFingerDist;
+      const newScale = Math.max(cam.MIN_SCALE, Math.min(cam.MAX_SCALE, cam.tscale * factor));
+      const wx = (newCenterX - W / 2) / cam.tscale + cam.tx;
+      const wy = (newCenterY - H / 2) / cam.tscale + cam.ty;
+      cam.tscale = newScale;
+      cam.tx = wx - (newCenterX - W / 2) / newScale;
+      cam.ty = wy - (newCenterY - H / 2) / newScale;
+    }
+
+    twoFingerDist = newDist;
+    twoFingerCenterX = newCenterX;
+    twoFingerCenterY = newCenterY;
+
+    // En modo navegación no se agita
+    mouseVel = 0;
+    hoverWorldX = null;
+    hoverWorldY = null;
   }
 }, { passive: false });
 
 canvas.addEventListener('touchend', async (e) => {
   if (e.touches.length === 0) {
-    if (!pinchActivo && touchDragDist < 10) {
+    // Todos los dedos levantados
+    if (touchSingleActive && touchSingleDragDist < 10) {
+      // Fue un tap sin arrastrar: abrir relato
       const rect = canvas.getBoundingClientRect();
-      const sx = touchPanStartX - rect.left;
-      const sy = touchPanStartY - rect.top;
+      const sx = touchSingleStartX - rect.left;
+      const sy = touchSingleStartY - rect.top;
       const w = screenToWorld(sx, sy);
       let target = null, best = Infinity;
       for (const p of pintitas) {
@@ -814,17 +877,16 @@ canvas.addEventListener('touchend', async (e) => {
       }
       if (target) await abrirRelato(target.respuestaId);
     }
-    pinchActivo = false;
-    isDragging = false;
-  } else if (e.touches.length === 1 && pinchActivo) {
-    const t = e.touches[0];
-    touchPanStartX = t.clientX;
-    touchPanStartY = t.clientY;
-    touchPanLastX = t.clientX;
-    touchPanLastY = t.clientY;
-    touchDragDist = 100;
-    pinchActivo = false;
-    isDragging = true;
+    touchSingleActive = false;
+    twoFingerActive = false;
+    hoverWorldX = null;
+    hoverWorldY = null;
+    mouseVel = 0;
+  } else if (e.touches.length === 1 && twoFingerActive) {
+    // De 2 dedos a 1: cierra modo navegación, NO activa agitación
+    // (el dedo restante quedaría como "anclaje" — debe levantarlo para reactivar agitación)
+    twoFingerActive = false;
+    touchSingleActive = false;
   }
 }, { passive: false });
 
@@ -956,7 +1018,9 @@ inicializar();
 setInterval(consultarNuevas, POLL_INTERVAL);
 
 // ============================================================
-// SHAKE
+// SHAKE — desorden de las pintitas al agitar el celular
+// Intensidad escala con la magnitud de la agitación.
+// Sin coordinación radial: cada pintita recibe dirección y magnitud aleatorias.
 // ============================================================
 let ultimoShake = 0, motionActivo = false;
 
@@ -968,14 +1032,15 @@ function activarMovimiento() {
     if (!acc) return;
     const ax = acc.x || 0, ay = acc.y || 0, az = acc.z || 0;
     const mag = Math.sqrt(ax * ax + ay * ay + az * az);
-    if (mag > 14) {
+    if (mag > 13) {
       const ahora = performance.now();
-      if (ahora - ultimoShake > 200) {
+      if (ahora - ultimoShake > 180) {
         ultimoShake = ahora;
-        const inten = Math.min(1.4, (mag - 14) * 0.06);
+        // Intensidad progresiva: agitación leve = movimiento sutil; sacudida = caos visible
+        const inten = Math.min(2.6, (mag - 13) * 0.10);
         for (const p of pintitas) {
           const a = Math.random() * Math.PI * 2;
-          const m = inten * (0.4 + Math.random() * 0.6);
+          const m = inten * (0.4 + Math.random() * 0.7);
           p.vx += Math.cos(a) * m;
           p.vy += Math.sin(a) * m;
         }
